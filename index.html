@@ -1,0 +1,637 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SLU Attendance Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&display=swap" rel="stylesheet">
+<style>
+/* Plan: Aramco blue/green on cool neutrals; condensed display face for headings, Plex Sans for body.
+   Layout: header + tab bar, then one working view per tab (timesheet grid is the centre of gravity). */
+:root{
+  --bg:#f3f6f9; --surface:#ffffff; --ink:#1d2733; --muted:#5f6b78; --line:#d9e1e8;
+  --blue:#00a3e0; --blue-deep:#0b5c8f; --green:#84bd00; --green-deep:#4f7a00;
+  --tint:#e5f5fc; --zebra:#f8fafc; --off:#e4e8ec; --off-ink:#7a8692;
+  --c-p:#dcefc0; --c-p-ink:#2f5a00; --c-lt:#ffe7b0; --c-lt-ink:#7a4f00; --c-noot:#f5a38f; --c-noot-ink:#6e1b07;
+  --c-a:#f8c9c1; --c-a-ink:#8f1d0b; --c-s:#f6d0e2; --c-s-ink:#86184d; --c-l:#cbeaf8; --c-l-ink:#0a5a80;
+  --c-t:#e3d8f0; --c-t-ink:#4b2a73; --warn:#fff5d6; --miss:#fde7e3; --today:#84bd00;
+  --font-display:"IBM Plex Sans Condensed", "Arial Narrow", Arial, sans-serif;
+  --font-body:"IBM Plex Sans", "Segoe UI", Arial, sans-serif;
+  --font-mono:"IBM Plex Mono", Consolas, monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0f1720; --surface:#16212c; --ink:#e6edf3; --muted:#9aa9b7; --line:#2a3846;
+    --blue:#33b8ea; --blue-deep:#7fd0f2; --green:#9fd12a; --green-deep:#b9e35a;
+    --tint:#12344a; --zebra:#1a2733; --off:#24313d; --off-ink:#7f8d9a;
+    --c-p:#2f4a16; --c-p-ink:#cdeba1; --c-lt:#4d3a0d; --c-lt-ink:#ffd98a; --c-noot:#6b2414; --c-noot-ink:#ffc3b3;
+    --c-a:#5a1f17; --c-a-ink:#ffb9ad; --c-s:#55203a; --c-s-ink:#ffc0dd; --c-l:#123f56; --c-l-ink:#a9def5;
+    --c-t:#36284d; --c-t-ink:#d9c8f2; --warn:#3a3214; --miss:#3d1f1b;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0f1720; --surface:#16212c; --ink:#e6edf3; --muted:#9aa9b7; --line:#2a3846;
+  --blue:#33b8ea; --blue-deep:#7fd0f2; --green:#9fd12a; --green-deep:#b9e35a;
+  --tint:#12344a; --zebra:#1a2733; --off:#24313d; --off-ink:#7f8d9a;
+  --c-p:#2f4a16; --c-p-ink:#cdeba1; --c-lt:#4d3a0d; --c-lt-ink:#ffd98a; --c-noot:#6b2414; --c-noot-ink:#ffc3b3;
+  --c-a:#5a1f17; --c-a-ink:#ffb9ad; --c-s:#55203a; --c-s-ink:#ffc0dd; --c-l:#123f56; --c-l-ink:#a9def5;
+  --c-t:#36284d; --c-t-ink:#d9c8f2; --warn:#3a3214; --miss:#3d1f1b;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font:14px/1.45 var(--font-body)}
+h1,h2,h3{font-family:var(--font-display);text-wrap:balance;margin:0}
+button,input,select,textarea{font:inherit;color:inherit}
+:focus-visible{outline:2px solid var(--blue);outline-offset:2px}
+.num{font-variant-numeric:tabular-nums}
+header.top{background:var(--surface);border-bottom:1px solid var(--line)}
+.bar{height:4px;background:linear-gradient(90deg,var(--green) 0 10%,var(--blue) 90% 100%)}
+.top-in{display:flex;flex-wrap:wrap;gap:12px 20px;align-items:center;justify-content:space-between;padding:12px 20px}
+.brand{display:flex;gap:12px;align-items:center}
+.mark{width:36px;height:36px;border-radius:6px;background:var(--blue-deep);position:relative;overflow:hidden;flex:none}
+.mark::after{content:"";position:absolute;inset:50% 0 0 0;background:var(--green);clip-path:polygon(0 40%,100% 0,100% 100%,0 100%)}
+.mark span{position:absolute;inset:0;display:grid;place-items:center;color:#fff;font:700 11px var(--font-display);z-index:1}
+.brand h1{font-size:20px;line-height:1.1}
+.brand p{margin:0;color:var(--muted);font-size:12px}
+.top-right{display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+.month{display:flex;align-items:center;gap:6px}
+.month button{border:1px solid var(--line);background:var(--surface);border-radius:6px;width:32px;height:32px;cursor:pointer}
+.month input{border:1px solid var(--line);background:var(--surface);border-radius:6px;height:32px;padding:0 8px}
+.me{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--muted)}
+.me img{width:26px;height:26px;border-radius:50%}
+.me b{color:var(--ink);font-weight:600}
+.me .btn{padding:4px 10px;font-size:12px}
+#gate{position:fixed;inset:0;z-index:50;background:var(--bg);display:grid;place-items:center;padding:20px}
+#gate[hidden]{display:none}
+#gate .card{width:min(400px,100%)}
+#gate .card-b{display:grid;gap:12px}
+#gate input{width:100%}
+#gate .or{text-align:center;font-size:12px;color:var(--muted)}
+nav.tabs{display:flex;gap:2px;padding:0 20px;overflow-x:auto;background:var(--surface);border-bottom:1px solid var(--line)}
+nav.tabs a{padding:10px 14px;color:var(--muted);text-decoration:none;border-bottom:3px solid transparent;white-space:nowrap;font-weight:500}
+nav.tabs a[aria-current="page"]{color:var(--blue-deep);border-bottom-color:var(--green)}
+main{padding:18px 20px 60px;max-width:1700px}
+.notice{border:1px solid var(--line);background:var(--warn);border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:13px}
+.notice.err{background:var(--miss)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px}
+.kpi{background:var(--surface);border:1px solid var(--line);border-left:4px solid var(--blue);border-radius:8px;padding:10px 12px}
+.kpi.good{border-left-color:var(--green)}
+.kpi.bad{border-left-color:#e2533a}
+.kpi small{display:block;color:var(--muted);font-size:12px}
+.kpi strong{font:600 24px var(--font-display)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:10px}
+.card-h{display:flex;flex-wrap:wrap;gap:8px;align-items:center;justify-content:space-between;padding:12px 14px;border-bottom:1px solid var(--line)}
+.card-h h2{font-size:17px}
+.card-b{padding:14px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 12px;font-size:12px;color:var(--muted)}
+.legend span{display:inline-flex;gap:5px;align-items:center}
+.chip{display:inline-grid;place-items:center;min-width:34px;height:20px;padding:0 4px;border-radius:4px;font:600 11px var(--font-body)}
+.gridwrap{overflow-x:auto}
+table.grid{border-collapse:separate;border-spacing:0;font-size:12px;min-width:100%}
+table.grid th,table.grid td{border-bottom:1px solid var(--line);border-right:1px solid var(--line);padding:0;text-align:center;height:30px}
+table.grid thead th{position:sticky;top:0;background:var(--surface);z-index:2;font-weight:600}
+table.grid .who{position:sticky;left:0;background:var(--surface);z-index:1;text-align:left;padding:0 8px;min-width:210px;max-width:230px}
+table.grid thead .who{z-index:3}
+.who b{display:block;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who small{color:var(--muted);font-size:11px}
+.dh{min-width:34px}
+.dh .wd{display:block;font-size:10px;color:var(--muted);font-weight:500}
+.dh.we{background:var(--zebra)}
+.dh.today{background:var(--today);color:#132300}
+.dh.today .wd{color:#132300}
+tr.crew th{background:var(--blue-deep);color:#fff;text-align:left;padding:4px 8px;font:600 13px var(--font-display);position:sticky;left:0}
+tr.wk td{height:20px;font-size:10px;font-weight:600}
+td.long{background:var(--c-p);color:var(--c-p-ink)}
+td.short{background:var(--c-lt);color:var(--c-lt-ink)}
+td.cell button{all:unset;display:grid;place-items:center;width:100%;height:30px;cursor:pointer;font-weight:600;font-size:11px;box-sizing:border-box}
+td.cell button:focus-visible{outline:2px solid var(--blue);outline-offset:-2px}
+td.cell.off button{background:var(--off);color:var(--off-ink);font-size:9px}
+td.cell.miss button{background:var(--miss)}
+td.cell.due button{background:var(--warn)}
+td.cell button[disabled]{cursor:default}
+.tot{min-width:46px;font-variant-numeric:tabular-nums}
+.tot.h{background:var(--tint);font-weight:600;color:var(--blue-deep)}
+tfoot td,tfoot th{background:var(--zebra);font-weight:600}
+.code-P{background:var(--c-p);color:var(--c-p-ink)}
+.code-LT1,.code-LT2,.code-LT3{background:var(--c-lt);color:var(--c-lt-ink)}
+.code-NOOT{background:var(--c-noot);color:var(--c-noot-ink)}
+.code-A{background:var(--c-a);color:var(--c-a-ink)}
+.code-S{background:var(--c-s);color:var(--c-s-ink)}
+.code-L{background:var(--c-l);color:var(--c-l-ink)}
+.code-T{background:var(--c-t);color:var(--c-t-ink)}
+.code-OFF{background:var(--off);color:var(--off-ink)}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:6px;padding:6px 12px;cursor:pointer;font-weight:500}
+.btn.primary{background:var(--blue-deep);border-color:var(--blue-deep);color:#fff}
+.btn:disabled{opacity:.5;cursor:default}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+label.f{display:grid;gap:4px;font-size:12px;color:var(--muted)}
+label.f input,label.f select,label.f textarea{border:1px solid var(--line);background:var(--bg);border-radius:6px;padding:6px 8px;color:var(--ink);font-size:14px}
+table.list{width:100%;border-collapse:collapse;font-size:13px}
+table.list th,table.list td{border-bottom:1px solid var(--line);padding:7px 8px;text-align:left;vertical-align:top}
+table.list th{font-weight:600;color:var(--muted);font-size:12px;background:var(--zebra)}
+table.list td.n{text-align:right;font-variant-numeric:tabular-nums}
+.bar-ot{height:6px;border-radius:3px;background:linear-gradient(90deg,var(--green),var(--blue))}
+.two{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start}
+.strip{display:flex;gap:2px;margin-top:6px}
+.strip i{width:8px;height:14px;border-radius:2px;background:var(--off)}
+.strip i.w{background:var(--blue-deep)}
+.rules td input{width:52px;text-align:center}
+.muted{color:var(--muted)}
+.small{font-size:12px}
+dialog{border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--ink);padding:0;max-width:440px;width:calc(100% - 32px)}
+dialog::backdrop{background:rgba(10,20,30,.45)}
+.dlg-h{padding:14px 16px;border-bottom:1px solid var(--line)}
+.dlg-h h3{font-size:18px}
+.dlg-b{padding:14px 16px;display:grid;gap:12px}
+.codes{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
+.codes button{border:2px solid transparent;border-radius:6px;padding:8px 0;cursor:pointer;font-weight:600;font-size:12px}
+.codes button[aria-pressed="true"]{border-color:var(--ink)}
+.dlg-f{padding:12px 16px;border-top:1px solid var(--line);display:flex;justify-content:flex-end;gap:8px}
+pre.mail{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:12px;font:12px/1.5 var(--font-mono);max-height:340px;overflow:auto}
+.toast{position:fixed;bottom:16px;left:50%;transform:translateX(-50%);background:var(--ink);color:var(--surface);padding:8px 14px;border-radius:8px;font-size:13px;z-index:20}
+@media (max-width:600px){ .top-in,main{padding-left:16px;padding-right:16px} nav.tabs{padding:0 8px} }
+@media (prefers-reduced-motion: reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="bar"></div>
+  <div class="top-in">
+    <div class="brand">
+      <div class="mark"><span>SLU</span></div>
+      <div><h1 id="unitTitle">Safaniya Lab Unit attendance</h1><p id="unitSub">NAPLD · crew rotations R-35 and R-31</p></div>
+    </div>
+    <div class="top-right">
+      <div class="month" aria-label="Working month">
+        <button id="mPrev" aria-label="Previous month">‹</button>
+        <input id="mPick" type="month" value="2026-11" aria-label="Month">
+        <button id="mNext" aria-label="Next month">›</button>
+      </div>
+      <div class="me" id="me"></div>
+    </div>
+  </div>
+  <nav class="tabs" aria-label="Sections">
+    <a href="#timesheet">Timesheet</a>
+    <a href="#overtime">Overtime</a>
+    <a href="#daily-email">Daily email</a>
+    <a href="#audit">Audit log</a>
+    <a href="#staff">Staff</a>
+    <a href="#config">Settings</a>
+  </nav>
+</header>
+<main id="view"></main>
+
+<div id="gate" hidden>
+  <section class="card">
+    <div class="card-h"><h2>Sign in</h2></div>
+    <form class="card-b" id="gateForm">
+      <p class="small muted" id="gateMsg">Sign in with the account the owner gave you.</p>
+      <label class="f" for="gEmail">Email<input id="gEmail" type="email" autocomplete="username" required></label>
+      <label class="f" for="gPass">Password<input id="gPass" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Sign in</button>
+      <button class="btn" type="button" id="gReset">Forgot password</button>
+      <div class="small" id="gateErr" style="color:#c2361b"></div>
+    </form>
+  </section>
+</div>
+
+<dialog id="dlg">
+  <form method="dialog" id="dlgForm">
+    <div class="dlg-h"><h3 id="dlgTitle">Attendance</h3><div class="small muted" id="dlgSub"></div></div>
+    <div class="dlg-b">
+      <div class="codes" id="dlgCodes" role="group" aria-label="Attendance code"></div>
+      <label class="f" for="dlgWhy">Reason <span id="dlgWhyReq"></span><textarea id="dlgWhy" rows="2" placeholder="For example: badge reader missed the punch"></textarea></label>
+      <div class="small muted" id="dlgLast"></div>
+      <div class="small" id="dlgErr" style="color:#c2361b"></div>
+    </div>
+    <div class="dlg-f">
+      <button type="button" class="btn" id="dlgCancel">Cancel</button>
+      <button type="button" class="btn primary" id="dlgSave">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="firebase-config.js"></script>
+<script>
+/* ---------------- constants & rules ---------------- */
+const CREWS = ["R-35 A","R-35 B","R-31 D","R-31 E","R-31 F"];
+const C35 = "WWWWWoo"+"WWWWooo";          // index 0 = Sunday starting a long week
+const C31 = "WWWWWWWooo"+"WWWWWWWoooo";   // index 0 = first day of a 7-day block followed by 3 off
+const CODES = ["P","LT1","LT2","LT3","NO OT","A","S","L","T",""];
+const CODE_NAME = {P:"Present",LT1:"Late up to 1 h",LT2:"Late 1–2 h",LT3:"Late 2–3 h","NO OT":"Late over 3 h, no OT",A:"Absent",S:"Sick leave",L:"Leave",T:"Training","":"Clear"};
+const DEFAULT_CFG = {
+  unitName:"Safaniya Lab Unit (SLU)", department:"NAPLD",
+  anchors:{"R-35 A":"2026-11-08","R-35 B":"2026-11-01","R-31 D":"2026-11-09","R-31 E":"2026-11-02","R-31 F":"2026-11-16"},
+  lateDed:{LT1:1,LT2:2,LT3:3},
+  ot:{long:[2,3,3,3,1,0,0], short:[2,1,1,3,0,0,0], r31:[2,4,4,4,4,4,12]},
+  recipients:""
+};
+const cls = c => "code-" + (c||"").replace(/\s/g,"");
+const pad = n => String(n).padStart(2,"0");
+const DAY = 86400000;
+const riyadhToday = () => new Intl.DateTimeFormat("en-CA",{timeZone:"Asia/Riyadh",year:"numeric",month:"2-digit",day:"2-digit"}).format(new Date());
+const mod = (n,d) => ((n%d)+d)%d;
+const daysIn = m => { const [y,mo]=m.split("-").map(Number); return new Date(Date.UTC(y,mo,0)).getUTCDate(); };
+const wd = ds => new Date(ds+"T00:00:00Z").getUTCDay();
+const WD = ["Su","Mo","Tu","We","Th","Fr","Sa"];
+const fmtDate = ds => new Date(ds+"T00:00:00Z").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",year:"numeric",timeZone:"UTC"});
+
+function cyc(crew, ds, cfg){
+  const c = crew.startsWith("R-35") ? C35 : C31;
+  const start = (cfg.anchors||{})[crew] || DEFAULT_CFG.anchors[crew];
+  return {c, i: mod(Math.round((Date.parse(ds)-Date.parse(start))/DAY), c.length)};
+}
+const isWork = (crew,ds,cfg) => { const {c,i}=cyc(crew,ds,cfg); return c[i]==="W"; };
+function weekType(crew,ds,cfg){ if(!crew.startsWith("R-35")) return ""; return cyc(crew,ds,cfg).i<7?"Long":"Short"; }
+function blockDay(crew,ds,cfg){ const {c,i}=cyc(crew,ds,cfg); if(c[i]!=="W") return 0; let j=i; while(j>0&&c[j-1]==="W") j--; return i-j+1; }
+function allowance(crew,ds,cfg){
+  const p = blockDay(crew,ds,cfg); if(!p) return 0;
+  const ot = cfg.ot||DEFAULT_CFG.ot;
+  const arr = crew.startsWith("R-31") ? ot.r31 : (weekType(crew,ds,cfg)==="Long" ? ot.long : ot.short);
+  return Number(arr[p-1]||0);
+}
+function otFor(crew,ds,code,cfg){
+  if(!isWork(crew,ds,cfg)) return 0;
+  if(!["P","LT1","LT2","LT3"].includes(code)) return 0;
+  const ded = (cfg.lateDed||DEFAULT_CFG.lateDed)[code]||0;
+  return Math.max(0, allowance(crew,ds,cfg)-ded);
+}
+
+/* ---------------- state ---------------- */
+const S = { db:null, user:null, me:null, access:{editors:[],viewers:[]}, noAccess:false, canWrite:null, isOwner:false,
+  cfg: structuredClone(DEFAULT_CFG), staff:[], rows:{}, audit:[], month:"2026-11",
+  loaded:{cfg:false,staff:false,rows:false,audit:false}, err:"", slow:false, readOnly:false, ready:false };
+let unsubRows=null;
+
+/* ---------------- helpers ---------------- */
+const $ = s => document.querySelector(s);
+function el(tag, attrs={}, ...kids){
+  const e=document.createElement(tag);
+  for(const [k,v] of Object.entries(attrs||{})){
+    if(v==null||v===false) continue;
+    if(k==="class") e.className=v; else if(k==="text") e.textContent=v;
+    else if(k.startsWith("on")) e.addEventListener(k.slice(2),v); else e.setAttribute(k,v===true?"":v);
+  }
+  for(const k of kids.flat()){ if(k==null||k===false) continue; e.append(k.nodeType?k:document.createTextNode(String(k))); }
+  return e;
+}
+function toast(msg){ const t=el("div",{class:"toast",role:"status",text:msg}); document.body.append(t); setTimeout(()=>t.remove(),2600); }
+async function copy(text){ try{ await navigator.clipboard.writeText(text); toast("Copied"); }catch{ toast("Copy blocked here. Select the text and press Ctrl+C."); } }
+const activeStaff = () => S.staff.filter(s=>s.active!==false).sort((a,b)=>CREWS.indexOf(a.crew)-CREWS.indexOf(b.crew)||(a.order||0)-(b.order||0));
+const dayRec = (eid,dd) => ((S.rows[eid]||{}).days||{})[dd] || null;
+const nameCache={};
+async function names(ids){
+  const u=[...new Set(ids.filter(Boolean))]; if(!S.db||!u.length) return {};
+  await Promise.all(u.filter(id=>!(id in nameCache)).map(async id=>{ try{ const d=await S.db.doc("users/"+id).get(); nameCache[id]=d.exists?d.data():null; }catch{ nameCache[id]=null; } }));
+  const o={}; u.forEach(id=>{ if(nameCache[id]) o[id]=nameCache[id]; }); return o;
+}
+
+/* merge-write one nested field; create the doc if it is missing */
+async function mergeWrite(path, body){
+  await S.db.doc(path).set(body,{merge:true});
+}
+
+/* ---------------- month stats ---------------- */
+function monthStats(){
+  const m=S.month, n=daysIn(m), today=riyadhToday();
+  const per={}; const daily=Array.from({length:n},()=>({duty:0,present:0,late:0,absent:0,missing:0}));
+  for(const s of activeStaff()){
+    const t={P:0,late:0,noot:0,A:0,S:0,L:0,T:0,ot:0,duty:0,missing:0};
+    for(let d=1; d<=n; d++){
+      const ds=`${m}-${pad(d)}`, dd=pad(d), r=dayRec(s.id,dd), c=r?r.c:"", work=isWork(s.crew,ds,S.cfg);
+      if(c==="P") t.P++; if(["LT1","LT2","LT3","NO OT"].includes(c)) t.late++; if(c==="NO OT") t.noot++;
+      if(c==="A") t.A++; if(c==="S") t.S++; if(c==="L") t.L++; if(c==="T") t.T++;
+      t.ot += otFor(s.crew,ds,c,S.cfg);
+      if(work && !["L","T"].includes(c)){ t.duty++; daily[d-1].duty++; }
+      if(work && !c && ds<=today){ t.missing++; daily[d-1].missing++; }
+      if(c==="P") daily[d-1].present++; if(["LT1","LT2","LT3","NO OT"].includes(c)) daily[d-1].late++; if(c==="A"||c==="S") daily[d-1].absent++;
+    }
+    const base=t.P+t.late+t.A+t.S; t.rate= base? Math.round(100*(t.P+t.late)/base):null;
+    per[s.id]=t;
+  }
+  const sum=k=>Object.values(per).reduce((a,t)=>a+t[k],0);
+  const base=sum("P")+sum("late")+sum("A")+sum("S");
+  return {per,daily,tot:{P:sum("P"),late:sum("late"),noot:sum("noot"),A:sum("A"),S:sum("S"),ot:sum("ot"),missing:sum("missing"),duty:sum("duty"),rate: base?Math.round(100*(sum("P")+sum("late"))/base):null}};
+}
+
+/* ---------------- views ---------------- */
+function statusNotes(){
+  const out=[];
+  if(S.ready&&!S.db) out.push(el("div",{class:"notice err",text:"The database isn't connected. Check firebase-config.js (see README)."}));
+  if(S.ready&&S.db&&S.noAccess) out.push(el("div",{class:"notice err",text:"Your account isn't on the access list yet. Ask the owner to add your email in Settings."}));
+  if(S.isOwner&&S.loaded.cfg&&S.loaded.staff&&!S.staff.length) out.push(el("div",{class:"notice"},
+    el("b",{text:"First run: load the starting data. "}),"Choose slu-starting-data.json (settings, staff list and the November SAP plan) from your device. ",
+    el("input",{type:"file",accept:".json,application/json","aria-label":"Starting data file",onchange:async e=>{ const f=e.target.files[0]; if(!f) return;
+      try{ const ops=JSON.parse(await f.text()); if(!Array.isArray(ops)||!ops.every(o=>o&&o.path&&o.data)) throw new Error("not a starting-data file");
+        for(let i=0;i<ops.length;i+=400){ const b=S.db.batch(); ops.slice(i,i+400).forEach(o=>b.set(S.db.doc(o.path),o.data,{merge:true})); await b.commit(); }
+        toast(`Loaded ${ops.length} records`); }catch(err){ toast("Couldn't load: "+(err.message||err)); } }})));
+  if(S.err) out.push(el("div",{class:"notice err",text:S.err}));
+  if(S.slow && S.db && !Object.values(S.loaded).every(Boolean)) out.push(el("div",{class:"notice",text:"Still waiting for the shared data. It may be out of date until it loads."}));
+  if(S.readOnly&&!S.noAccess) out.push(el("div",{class:"notice",text:"You can view this timesheet but not change it. Ask the owner to add your email as an editor in Settings."}));
+  return out;
+}
+
+function viewTimesheet(){
+  const m=S.month, n=daysIn(m), today=riyadhToday(), st=monthStats();
+  const kpi=(label,val,kind)=>el("div",{class:"kpi "+(kind||"")},el("small",{text:label}),el("strong",{class:"num",text:val}));
+  const kpis=el("div",{class:"kpis"},
+    kpi("On-duty days (scheduled)",st.tot.duty),
+    kpi("Present + late",st.tot.P+st.tot.late,"good"),
+    kpi("Late (of which NO OT)",`${st.tot.late} (${st.tot.noot})`),
+    kpi("Absent / sick",`${st.tot.A} / ${st.tot.S}`,"bad"),
+    kpi("Attendance rate",st.tot.rate==null?"–":st.tot.rate+"%","good"),
+    kpi("Overtime hours",st.tot.ot),
+    kpi("Entries missing to date",st.tot.missing,st.tot.missing?"bad":"good"));
+
+  const legend=el("div",{class:"legend"},
+    ...["P","LT1","LT2","LT3","NO OT","A","S","L","T","OFF"].map(c=>el("span",{},el("i",{class:"chip "+cls(c),text:c}),c==="OFF"?"Day off (rotation)":CODE_NAME[c])),
+    el("span",{},el("i",{class:"chip",style:"background:var(--warn)",text:" "}),"Due today"),
+    el("span",{},el("i",{class:"chip",style:"background:var(--miss)",text:" "}),"Missing"));
+
+  const head=el("tr",{},el("th",{class:"who",scope:"col",text:"Employee"}),
+    ...Array.from({length:n},(_,i)=>{ const ds=`${m}-${pad(i+1)}`, w=wd(ds);
+      return el("th",{class:"dh"+(w===5||w===6?" we":"")+(ds===today?" today":""),scope:"col"},el("span",{class:"wd",text:WD[w]}),String(i+1)); }),
+    ...["P","Late","NO OT","A","S","L","T","Att.","OT h"].map(h=>el("th",{class:"tot",scope:"col",text:h})));
+  const body=el("tbody");
+  for(const crew of CREWS){
+    const people=activeStaff().filter(s=>s.crew===crew); if(!people.length) continue;
+    body.append(el("tr",{class:"crew"},el("th",{colspan:String(n+10),text:`${crew} · ${crew.startsWith("R-35")?"5-2 / 4-3":"7-3 / 7-4"}`})));
+    if(crew.startsWith("R-35")){
+      body.append(el("tr",{class:"wk"},el("td",{class:"who small muted",text:"Week type"}),
+        ...Array.from({length:n},(_,i)=>{ const t=weekType(crew,`${m}-${pad(i+1)}`,S.cfg); return el("td",{class:t==="Long"?"long":"short",title:t==="Long"?"Long week: 5 on / 2 off":"Short week: 4 on / 3 off",text:t[0]}); }),
+        el("td",{colspan:"9"})));
+    }
+    for(const s of people){
+      const t=st.per[s.id];
+      const tr=el("tr",{},el("th",{class:"who",scope:"row"},el("b",{text:s.name}),el("small",{text:`${s.badge} · ${s.title}`})));
+      for(let d=1; d<=n; d++){
+        const dd=pad(d), ds=`${m}-${dd}`, r=dayRec(s.id,dd), c=r?r.c:"", work=isWork(s.crew,ds,S.cfg);
+        let k="cell"; if(!work&&!c) k+=" off"; else if(work&&!c&&ds<today) k+=" miss"; else if(work&&!c&&ds===today) k+=" due";
+        const label = c || (work?"":"OFF");
+        const btn=el("button",{type:"button",class:c?cls(c):"","aria-label":`${s.name}, ${fmtDate(ds)}: ${c?CODE_NAME[c]:work?"not entered":"day off"}`,disabled:S.readOnly||!S.db?true:null,onclick:()=>openCell(s,ds)},label);
+        if(r) btn.title = r.src ? `From ${r.src}` : "Changed — open to see who";
+        tr.append(el("td",{class:k},btn));
+      }
+      tr.append(...[t.P,t.late,t.noot,t.A,t.S,t.L,t.T,t.rate==null?"–":t.rate+"%"].map(v=>el("td",{class:"tot",text:v})), el("td",{class:"tot h",text:t.ot}));
+      body.append(tr);
+    }
+  }
+  const foot=el("tfoot",{},el("tr",{},el("th",{class:"who",scope:"row",text:"Not entered (to date)"}),
+    ...st.daily.map((x,i)=>{ const ds=`${m}-${pad(i+1)}`; return el("td",{style: x.missing&&ds<=today?"color:#c2361b":"",text: ds<=today? x.missing : ""}); }), el("td",{colspan:"9"})));
+  const tbl=el("table",{class:"grid"},el("thead",{},head),body,foot);
+  return [ ...statusNotes(), kpis,
+    el("section",{class:"card"},
+      el("div",{class:"card-h"},el("h2",{text:`Timesheet · ${new Date(m+"-01T00:00:00Z").toLocaleDateString("en-GB",{month:"long",year:"numeric",timeZone:"UTC"})}`}),
+        el("div",{class:"row"},el("button",{class:"btn",type:"button",onclick:()=>copy(tsv()),text:"Copy for Excel"}))),
+      el("div",{class:"card-b"},legend),
+      el("div",{class:"gridwrap"},tbl)) ];
+}
+
+function tsv(){
+  const m=S.month,n=daysIn(m),st=monthStats();
+  const rows=[["Crew","Badge","Name",...Array.from({length:n},(_,i)=>String(i+1)),"P","Late","NO OT","A","S","L","T","OT h"]];
+  for(const s of activeStaff()){ const t=st.per[s.id];
+    rows.push([s.crew,s.badge,s.name,...Array.from({length:n},(_,i)=>{ const ds=`${m}-${pad(i+1)}`, r=dayRec(s.id,pad(i+1)); return r?r.c:(isWork(s.crew,ds,S.cfg)?"":"OFF"); }),t.P,t.late,t.noot,t.A,t.S,t.L,t.T,t.ot]); }
+  return rows.map(r=>r.join("\t")).join("\n");
+}
+
+function viewOvertime(){
+  const st=monthStats(), list=activeStaff().map(s=>({s,t:st.per[s.id]})).sort((a,b)=>b.t.ot-a.t.ot);
+  const max=Math.max(1,...list.map(x=>x.t.ot));
+  const tbl=el("table",{class:"list"},el("thead",{},el("tr",{},...["Employee","Crew","Worked days","Late days","NO OT days","OT hours",""].map(h=>el("th",{text:h})))),
+    el("tbody",{},...list.map(({s,t})=>el("tr",{},el("td",{text:s.name}),el("td",{text:s.crew}),el("td",{class:"n",text:t.P+t.late}),el("td",{class:"n",text:t.late}),el("td",{class:"n",text:t.noot}),el("td",{class:"n",text:t.ot}),
+      el("td",{style:"width:30%"},el("div",{class:"bar-ot",style:`width:${(100*t.ot/max).toFixed(1)}%`}))))));
+  const o=S.cfg.ot||DEFAULT_CFG.ot;
+  const rules=el("table",{class:"list"},el("thead",{},el("tr",{},el("th",{text:"Work block"}),...[1,2,3,4,5,6,7].map(d=>el("th",{text:"Day "+d})),el("th",{text:"Total"}))),
+    el("tbody",{},...[["R-35 long week (5 on / 2 off)",o.long,5],["R-35 short week (4 on / 3 off)",o.short,4],["R-31 block (7 on)",o.r31,7]].map(([l,a,len])=>
+      el("tr",{},el("td",{text:l}),...a.map((v,i)=>el("td",{class:"n",text:i<len?v:"–"})),el("td",{class:"n",text:a.slice(0,len).reduce((x,y)=>x+Number(y),0)})))));
+  const ld=S.cfg.lateDed||DEFAULT_CFG.lateDed;
+  return [...statusNotes(), el("div",{class:"two"},
+    el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Overtime by employee"}),el("strong",{class:"num",text:`${st.tot.ot} h this month`})),el("div",{class:"card-b"},tbl)),
+    el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"How overtime is calculated"})),el("div",{class:"card-b"},rules,
+      el("p",{class:"small muted",text:`Day 1 is the first working day after the days off. On a worked day, LT1, LT2 and LT3 take off ${ld.LT1}, ${ld.LT2} and ${ld.LT3} h (never below 0). NO OT, absent, sick, leave, training and days off earn 0 h. Change these on the Settings tab.`}))))];
+}
+
+function mailText(ds){
+  const dd=ds.slice(8), act=activeStaff(), lines=[];
+  const by={}; for(const c of ["P","LT1","LT2","LT3","NO OT","A","S","L","T"]) by[c]=[];
+  const missing=[], off=[];
+  for(const s of act){ const r=(S.month===ds.slice(0,7))?dayRec(s.id,dd):null; const c=r?r.c:""; const work=isWork(s.crew,ds,S.cfg);
+    if(c) by[c].push(s); else if(work) missing.push(s); else off.push(s); }
+  const otTotal=act.reduce((a,s)=>{ const r=(S.month===ds.slice(0,7))?dayRec(s.id,dd):null; return a+otFor(s.crew,ds,r?r.c:"",S.cfg); },0);
+  lines.push(`${S.cfg.unitName} · ${S.cfg.department}`, `Daily attendance – ${fmtDate(ds)}`, "");
+  lines.push(`Present: ${by.P.length}   Late: ${by.LT1.length+by.LT2.length+by.LT3.length+by["NO OT"].length}   Absent: ${by.A.length}   Sick: ${by.S.length}   Leave: ${by.L.length}   Training: ${by.T.length}   Off: ${off.length}   Not entered: ${missing.length}`);
+  lines.push(`Overtime earned today: ${otTotal} h`, "");
+  const sect=(t,arr)=>{ if(arr.length){ lines.push(t); arr.forEach(s=>lines.push(`  - ${s.name} (${s.badge}, ${s.crew})`)); lines.push(""); } };
+  sect("Late, no overtime (over 3 h):",by["NO OT"]); sect("Late 2–3 h:",by.LT3); sect("Late 1–2 h:",by.LT2); sect("Late up to 1 h:",by.LT1);
+  sect("Absent:",by.A); sect("Sick leave:",by.S); sect("On leave:",by.L); sect("Training:",by.T); sect("Not entered yet:",missing);
+  lines.push("Saudi Aramco: Company General Use");
+  return lines.join("\n");
+}
+function viewMail(){
+  const today=riyadhToday(); let ds = S.month===today.slice(0,7)? today : `${S.month}-01`;
+  const pre=el("pre",{class:"mail",id:"mailPre"}); const subj=()=>`${S.cfg.unitName} daily attendance – ${fmtDate(ds)}`;
+  const draw=()=>{ pre.textContent=mailText(ds); link.href=`mailto:${encodeURIComponent(S.cfg.recipients||"")}?subject=${encodeURIComponent(subj())}&body=${encodeURIComponent(mailText(ds))}`; };
+  const inp=el("input",{type:"date",id:"mailDate",value:ds,min:`${S.month}-01`,max:`${S.month}-${pad(daysIn(S.month))}`,onchange:e=>{ if(e.target.value){ ds=e.target.value; draw(); } }});
+  const link=el("a",{class:"btn",href:"#",text:"Open in Outlook"});
+  setTimeout(draw);
+  return [...statusNotes(), el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Daily attendance email"}),
+    el("div",{class:"row"},el("label",{class:"f",for:"mailDate"},"Date",inp),el("button",{class:"btn primary",type:"button",onclick:()=>copy(mailText(ds)),text:"Copy email text"}),
+      el("button",{class:"btn",type:"button",onclick:()=>copy(subj()),text:"Copy subject"}),link)),
+    el("div",{class:"card-b"},
+      el("p",{class:"small muted",text:`This page can't send email by itself. Copy the text into a new Outlook message, or use Open in Outlook if your computer allows it. Recipients set on the Settings tab: ${S.cfg.recipients||"none yet"}.`}),pre))];
+}
+
+async function viewAudit(){
+  const rows=[]; for(const d of S.audit){ for(const [id,e] of Object.entries(d.entries||{})) rows.push({id,...e}); }
+  rows.sort((a,b)=>(b.at||"").localeCompare(a.at||""));
+  const ps=await names(rows.map(r=>r.by));
+  const staffName=Object.fromEntries(S.staff.map(s=>[s.id,s.name]));
+  const q=el("input",{type:"search",id:"auditQ",placeholder:"Filter by name, code or reason"});
+  const tb=el("tbody");
+  const draw=()=>{ const f=q.value.trim().toLowerCase(); tb.replaceChildren(...rows.filter(r=>!f||JSON.stringify([staffName[r.emp],r.old,r.new,r.why,r.what,(ps[r.by]||{}).name]).toLowerCase().includes(f)).slice(0,400).map(r=>
+    el("tr",{},el("td",{class:"num",text:new Date(r.at).toLocaleString("en-GB",{timeZone:"Asia/Riyadh",dateStyle:"medium",timeStyle:"short"})}),
+      el("td",{text:(ps[r.by]&&ps[r.by].name)||"Someone"}),el("td",{text:r.what||"Attendance"}),el("td",{text:staffName[r.emp]||r.emp||""}),
+      el("td",{text:r.date?fmtDate(r.date):""}),el("td",{},r.old?el("i",{class:"chip "+cls(r.old),text:r.old}):"—"," → ",r.new?el("i",{class:"chip "+cls(r.new),text:r.new}):"cleared"),
+      el("td",{text:r.why||""})))); };
+  q.addEventListener("input",draw); draw();
+  const csv=()=>copy([["When (Riyadh)","Changed by","What","Employee","Date","Old","New","Reason"],...rows.map(r=>[new Date(r.at).toLocaleString("en-GB",{timeZone:"Asia/Riyadh"}),(ps[r.by]||{}).name||"",r.what||"Attendance",staffName[r.emp]||"",r.date||"",r.old||"",r.new||"",(r.why||"").replace(/\s+/g," ")])].map(x=>x.join("\t")).join("\n"));
+  return [...statusNotes(), el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Audit log"}),el("div",{class:"row"},q,el("button",{class:"btn",type:"button",onclick:csv,text:"Copy for Excel"}))),
+    el("div",{class:"card-b"},el("p",{class:"small muted",text:"Every change is recorded with the signed-in person who made it, taken from their sign-in. Showing the last 62 days."}),
+      rows.length? el("div",{class:"gridwrap"},el("table",{class:"list"},el("thead",{},el("tr",{},...["When","Changed by","What","Employee","Date","Change","Reason"].map(h=>el("th",{text:h})))),tb))
+      : el("p",{class:"muted",text:"No changes recorded yet. Entries appear here as soon as someone saves a code on the timesheet."})))];
+}
+
+function viewStaff(){
+  const can=S.isOwner&&S.db;
+  const tb=el("tbody",{},...[...S.staff].sort((a,b)=>CREWS.indexOf(a.crew)-CREWS.indexOf(b.crew)||(a.order||0)-(b.order||0)).map(s=>el("tr",{},
+    el("td",{text:s.badge}),el("td",{text:s.name}),el("td",{text:s.title}),el("td",{},can?crewSel(s):s.crew),el("td",{text:s.active===false?"Inactive":"Active"}),
+    el("td",{},can?el("button",{class:"btn",type:"button",onclick:()=>saveStaff({...s,active:s.active===false},"Status"),text:s.active===false?"Activate":"Deactivate"}):""))));
+  function crewSel(s){ const sel=el("select",{"aria-label":`Crew for ${s.name}`,onchange:e=>saveStaff({...s,crew:e.target.value},"Crew")},...CREWS.map(c=>el("option",{value:c,selected:c===s.crew?true:null,text:c}))); return sel; }
+  const add=el("form",{class:"row",onsubmit:async e=>{ e.preventDefault(); const f=new FormData(e.target); const badge=String(f.get("badge")||"").trim(), name=String(f.get("name")||"").trim();
+      if(!badge||!name){ toast("Badge and name are required"); return; } if(S.staff.some(s=>s.badge===badge)){ toast("That badge is already listed"); return; }
+      await saveStaff({id:"e"+badge.replace(/[^A-Za-z0-9]/g,""),badge,name,title:String(f.get("title")||"Lab Tech"),crew:String(f.get("crew")),order:S.staff.length+1,active:true},"Added"); e.target.reset(); }},
+    el("label",{class:"f",for:"nb"},"Badge",el("input",{id:"nb",name:"badge",required:true,size:"8"})),
+    el("label",{class:"f",for:"nn"},"Name (Last, First)",el("input",{id:"nn",name:"name",required:true,size:"26"})),
+    el("label",{class:"f",for:"nt"},"Job title",el("input",{id:"nt",name:"title",size:"18",value:"Lab Tech"})),
+    el("label",{class:"f",for:"nc"},"Crew",el("select",{id:"nc",name:"crew"},...CREWS.map(c=>el("option",{value:c,text:c})))),
+    el("button",{class:"btn primary",type:"submit",text:"Add employee"}));
+  return [...statusNotes(), el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:`Staff (${S.staff.filter(s=>s.active!==false).length} active)`})),
+    el("div",{class:"card-b"},can?add:el("p",{class:"small muted",text:"Only the owner can add staff or change crews."}),
+      el("div",{class:"gridwrap",style:"margin-top:12px"},el("table",{class:"list"},el("thead",{},el("tr",{},...["Badge","Name","Job title","Crew","Status",""].map(h=>el("th",{text:h})))),tb))))];
+}
+async function saveStaff(s,what){
+  try{ await S.db.doc("staff/"+s.id).set({badge:s.badge,name:s.name,title:s.title,crew:s.crew,order:s.order||0,active:s.active!==false,note:s.note||""});
+    await logAudit({what:"Staff: "+what,emp:s.id,old:"",new:what==="Crew"?s.crew:(s.active===false?"inactive":"active"),why:""}); toast("Staff saved"); }
+  catch(e){ toast("Not saved: "+(e&&e.message||"try again")); }
+}
+
+function viewConfig(){
+  const can=S.isOwner&&S.db; const c=structuredClone(S.cfg);
+  const inp=(id,val,attrs={})=>el("input",{id,value:val,disabled:can?null:true,...attrs});
+  const anchors=CREWS.map(cr=>{ const id="an-"+cr.replace(/\W/g,""); const strip=el("div",{class:"strip"});
+    const drawStrip=v=>{ strip.replaceChildren(...Array.from({length:daysIn(S.month)},(_,i)=>{ const ds=`${S.month}-${pad(i+1)}`; const w=isWork(cr,ds,{anchors:{[cr]:v}}); return el("i",{class:w?"w":"",title:`${i+1}: ${w?"work":"off"}`}); })); };
+    const box=inp(id,c.anchors[cr]||"",{type:"date",onchange:e=>{ c.anchors[cr]=e.target.value; drawStrip(e.target.value); }}); drawStrip(c.anchors[cr]);
+    return el("div",{class:"card-b",style:"border-bottom:1px solid var(--line)"},el("label",{class:"f",for:id},`${cr} · ${cr.startsWith("R-35")?"Sunday that starts a long week":"first day of a 7-day block followed by 3 off"}`,box),strip); });
+  const otRow=(key,label,len)=>el("tr",{},el("td",{text:label}),...Array.from({length:7},(_,i)=>el("td",{},i<len?el("input",{type:"number",min:"0",max:"24",step:"0.5","aria-label":`${label} day ${i+1}`,value:c.ot[key][i],disabled:can?null:true,oninput:e=>{ c.ot[key][i]=Number(e.target.value)||0; }}):"–")));
+  const save=async()=>{
+    for(const cr of CREWS){ if(!/^\d{4}-\d{2}-\d{2}$/.test(c.anchors[cr]||"")){ toast(`Enter a start date for ${cr}`); return; } if(cr.startsWith("R-35")&&wd(c.anchors[cr])!==0){ toast(`${cr}: pick the Sunday that starts a long week`); return; } }
+    c.unitName=$("#cfUnit").value.trim()||DEFAULT_CFG.unitName; c.department=$("#cfDept").value.trim()||DEFAULT_CFG.department; c.recipients=$("#cfMail").value.trim();
+    for(const k of ["LT1","LT2","LT3"]) c.lateDed[k]=Math.max(0,Math.min(24,Number($("#ld"+k).value)||0));
+    const list=id=>[...new Set($(id).value.split(/[\s,;]+/).map(x=>x.trim().toLowerCase()).filter(x=>x.includes("@")))];
+    try{ await S.db.doc("config/main").set(c); await S.db.doc("config/access").set({...S.access,editors:list("#acEd"),viewers:list("#acVw")},{merge:true}); await logAudit({what:"Settings",emp:"",old:"",new:"updated",why:""}); toast("Settings saved"); }
+    catch(e){ toast("Not saved: "+(e&&e.message||"try again")); }
+  };
+  return [...statusNotes(), !can?el("div",{class:"notice",text:"Only the owner can change settings. You can view them here."}):null,
+    el("div",{class:"two"},
+      el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Crew rotation"}),el("span",{class:"small muted",text:`Preview: ${S.month}`})),
+        el("div",{class:"card-b small muted",text:"R-35 alternates long weeks (5 on / 2 off) and short weeks (4 on / 3 off). R-31 runs 7 on / 3 off, 7 on / 4 off. The strip shows work (blue) and off days for the month above."}),...anchors),
+      el("div",{style:"display:grid;gap:16px"},
+        el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Overtime hours per day of work block"})),el("div",{class:"card-b gridwrap"},
+          el("table",{class:"list rules"},el("thead",{},el("tr",{},el("th",{text:"Block"}),...[1,2,3,4,5,6,7].map(d=>el("th",{text:"Day "+d})))),
+            el("tbody",{},otRow("long","R-35 long",5),otRow("short","R-35 short",4),otRow("r31","R-31",7))))),
+        el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Late deductions (hours)"})),el("div",{class:"card-b row"},
+          ...["LT1","LT2","LT3"].map(k=>el("label",{class:"f",for:"ld"+k},k,inp("ld"+k,c.lateDed[k],{type:"number",min:"0",max:"24",step:"0.5",size:"4"}))))),
+        el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"General"})),el("div",{class:"card-b",style:"display:grid;gap:10px"},
+          el("label",{class:"f",for:"cfUnit"},"Unit name",inp("cfUnit",c.unitName)),
+          el("label",{class:"f",for:"cfDept"},"Department",inp("cfDept",c.department)),
+          el("label",{class:"f",for:"cfMail"},"Daily email recipients (separate with ;)",inp("cfMail",c.recipients||"",{placeholder:"name1@aramco.com; name2@aramco.com"})))),
+        el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"People with access"})),el("div",{class:"card-b",style:"display:grid;gap:10px"},
+          el("p",{class:"small muted",text:"One email per line. Editors can enter attendance; viewers can only look. Create each person's login in Firebase first (see README)."}),
+          el("label",{class:"f",for:"acEd"},"Editors (group leaders)",el("textarea",{id:"acEd",rows:"4",disabled:can?null:true},(S.access.editors||[]).join("\n"))),
+          el("label",{class:"f",for:"acVw"},"Viewers",el("textarea",{id:"acVw",rows:"3",disabled:can?null:true},(S.access.viewers||[]).join("\n"))))),
+        can?el("div",{class:"row"},el("button",{class:"btn primary",type:"button",onclick:save,text:"Save settings"})):null))];
+}
+
+/* ---------------- cell dialog ---------------- */
+let dlgCtx=null;
+async function openCell(s,ds){
+  if(!S.db||S.readOnly) return;
+  const dd=ds.slice(8), r=dayRec(s.id,dd), cur=r?r.c:"", work=isWork(s.crew,ds,S.cfg), past=ds<riyadhToday();
+  dlgCtx={s,ds,dd,cur,pick:cur,past};
+  $("#dlgTitle").textContent=s.name;
+  const wt=weekType(s.crew,ds,S.cfg);
+  $("#dlgSub").textContent=`${fmtDate(ds)} · ${s.crew}${wt?` · ${wt} week`:""} · ${work?`work day ${blockDay(s.crew,ds,S.cfg)}, OT available ${allowance(s.crew,ds,S.cfg)} h`:"day off"}`;
+  const box=$("#dlgCodes"); box.replaceChildren(...CODES.map(c=>el("button",{type:"button",class:c?cls(c):"","aria-pressed":String(c===cur),title:CODE_NAME[c],onclick:e=>{ dlgCtx.pick=c; box.querySelectorAll("button").forEach(b=>b.setAttribute("aria-pressed","false")); e.currentTarget.setAttribute("aria-pressed","true"); }},c||"Clear")));
+  $("#dlgWhy").value=""; $("#dlgWhyReq").textContent=past?"(required for a past date)":"(optional)"; $("#dlgErr").textContent="";
+  $("#dlgLast").textContent= r ? (r.src?`Pre-filled from ${r.src}.`:"Loading who changed it last…") : "Not entered yet.";
+  $("#dlg").showModal();
+  if(r&&r.by){ const ps=await names([r.by]); $("#dlgLast").textContent=`Last changed by ${(ps[r.by]&&ps[r.by].name)||"Someone"} on ${new Date(r.at).toLocaleString("en-GB",{timeZone:"Asia/Riyadh",dateStyle:"medium",timeStyle:"short"})}${r.why?` · ${r.why}`:""}.`; }
+}
+$("#dlgCancel").addEventListener("click",()=>$("#dlg").close());
+$("#dlgSave").addEventListener("click",async()=>{
+  const x=dlgCtx; if(!x) return; const why=$("#dlgWhy").value.trim();
+  if(x.pick===x.cur){ $("#dlg").close(); return; }
+  if(x.past&&!why){ $("#dlgErr").textContent="Add a reason: this date has passed."; return; }
+  const btn=$("#dlgSave"); btn.disabled=true;
+  try{
+    const at=new Date().toISOString();
+    const val = x.pick ? {c:x.pick,by:S.me&&S.me.id||null,at,why} : {c:"",by:S.me&&S.me.id||null,at,why};
+    await mergeWrite(`months/${S.month}/rows/${x.s.id}`,{emp:x.s.id,days:{[x.dd]:val}});
+    await logAudit({what:"Attendance",emp:x.s.id,date:x.ds,old:x.cur,new:x.pick,why});
+    $("#dlg").close(); toast("Saved");
+  }catch(e){
+    if(e&&e.code==="permission-denied"){ S.readOnly=true; $("#dlg").close(); render(); }
+    else $("#dlgErr").textContent="Not saved: "+((e&&e.message)||"try again");
+  }finally{ btn.disabled=false; }
+});
+async function logAudit(e){
+  const at=new Date().toISOString(), day=riyadhToday();
+  const id=at.replace(/[^0-9]/g,"")+Math.random().toString(36).slice(2,6);
+  try{ await mergeWrite("audit/"+day,{day,entries:{[id]:{...e,by:S.me&&S.me.id||null,at}}}); }catch{ /* audit failure shouldn't block the entry */ }
+}
+
+/* ---------------- routing & render ---------------- */
+const ROUTES={timesheet:viewTimesheet,overtime:viewOvertime,"daily-email":viewMail,audit:viewAudit,staff:viewStaff,config:viewConfig};
+let renderSeq=0;
+async function render(){
+  const seq=++renderSeq; const key=(location.hash||"#timesheet").slice(1); const fn=ROUTES[key]||viewTimesheet;
+  document.querySelectorAll("nav.tabs a").forEach(a=>a.setAttribute("aria-current",a.getAttribute("href")==="#"+(ROUTES[key]?key:"timesheet")?"page":"false"));
+  $("#unitTitle").textContent=`${S.cfg.unitName.replace(/\s*\(SLU\)/,"")} attendance`; $("#unitSub").textContent=`${S.cfg.department} · crew rotations R-35 and R-31`;
+  const kids=await fn(); if(seq!==renderSeq) return;
+  const v=$("#view"), sx=(v.querySelector(".gridwrap")||{}).scrollLeft||0;
+  v.replaceChildren(...kids.flat().filter(Boolean));
+  const g=v.querySelector(".gridwrap"); if(g&&sx) g.scrollLeft=sx;
+}
+let rT=null; const soon=()=>{ clearTimeout(rT); rT=setTimeout(render,60); };
+window.addEventListener("hashchange",render);
+function setMonth(m){ S.month=m; $("#mPick").value=m; subRows(); soon(); }
+$("#mPick").addEventListener("change",e=>{ if(/^\d{4}-\d{2}$/.test(e.target.value)) setMonth(e.target.value); });
+const shift=k=>{ const [y,mo]=S.month.split("-").map(Number); const d=new Date(Date.UTC(y,mo-1+k,1)); setMonth(`${d.getUTCFullYear()}-${pad(d.getUTCMonth()+1)}`); };
+$("#mPrev").addEventListener("click",()=>shift(-1)); $("#mNext").addEventListener("click",()=>shift(1));
+
+function onErr(e){ if(e&&e.code==="permission-denied"){ S.err="You don't have access to this data. Ask the owner to add your email in Settings."; } else if(e){ S.err="Couldn't load shared data ("+(e.code||"error")+")."; } soon(); }
+function subRows(){
+  if(!S.db) return; if(unsubRows) unsubRows(); S.rows={}; S.loaded.rows=false;
+  unsubRows=S.db.collection(`months/${S.month}/rows`).onSnapshot(q=>{ const o={}; q.docs.forEach(d=>o[d.id]=d.data()); S.rows=o; S.loaded.rows=true; soon(); },onErr);
+}
+
+(function boot(){
+  const today=riyadhToday(); S.month=today>="2026-11"?today.slice(0,7):"2026-11"; $("#mPick").value=S.month;
+  render();
+  const cfg=window.FIREBASE_CONFIG;
+  if(!window.firebase||!cfg||!cfg.apiKey||cfg.apiKey.startsWith("PASTE")){ S.ready=true; soon(); return; }
+  firebase.initializeApp(cfg);
+  const auth=firebase.auth(), db=firebase.firestore();
+  const gate=$("#gate"), gErr=$("#gateErr");
+  const fail=e=>{ gErr.textContent=({"auth/invalid-credential":"Wrong email or password.","auth/wrong-password":"Wrong email or password.","auth/user-not-found":"No account with that email. Ask the owner to create one.","auth/too-many-requests":"Too many tries. Wait a few minutes.","auth/popup-closed-by-user":""})[e.code]??(e.message||"Sign-in failed"); };
+  $("#gateForm").addEventListener("submit",e=>{ e.preventDefault(); gErr.textContent=""; auth.signInWithEmailAndPassword($("#gEmail").value.trim(),$("#gPass").value).catch(fail); });
+  $("#gReset").addEventListener("click",()=>{ const em=$("#gEmail").value.trim(); if(!em){ gErr.textContent="Type your email first."; return; } auth.sendPasswordResetEmail(em).then(()=>{ gErr.textContent="Reset link sent. Check your email."; }).catch(fail); });
+  let unsubs=[];
+  auth.onAuthStateChanged(async u=>{
+    unsubs.forEach(f=>f()); unsubs=[]; if(unsubRows){ unsubRows(); unsubRows=null; }
+    if(!u){ S.db=null; S.ready=false; gate.hidden=false; $("#me").replaceChildren(); return; }
+    gate.hidden=true;
+    const email=(u.email||"").toLowerCase(), name=u.displayName||email.split("@")[0];
+    S.me={id:u.uid,name,email}; S.db=db; S.ready=true; S.err=""; S.noAccess=false; S.readOnly=false;
+    try{ await db.doc("users/"+u.uid).set({name,email},{merge:true}); }catch{}
+    // who is the owner? (only the real owner can create this doc; the Firestore rules enforce it)
+    let acc=null;
+    try{ const a=await db.doc("config/access").get(); acc=a.exists?a.data():null; }catch{}
+    if(!acc){ try{ await db.doc("config/access").set({owner:email,editors:[],viewers:[]}); acc={owner:email,editors:[],viewers:[]}; }catch{ acc={editors:[],viewers:[]}; } }
+    S.access={editors:[],viewers:[],...acc};
+    S.isOwner=!!acc.owner&&acc.owner===email;
+    const isEd=S.isOwner||(S.access.editors||[]).includes(email), isVw=isEd||(S.access.viewers||[]).includes(email);
+    S.canWrite=isEd; S.readOnly=!isEd; S.noAccess=!isVw;
+    $("#me").replaceChildren(el("span",{},el("b",{text:name}),` · ${S.isOwner?"Owner":isEd?"Editor":isVw?"Viewer":"No access"}`),el("button",{class:"btn",type:"button",onclick:()=>auth.signOut(),text:"Sign out"}));
+    if(!isVw){ soon(); return; }
+    setTimeout(()=>{ S.slow=true; soon(); },10000);
+    unsubs.push(db.doc("config/access").onSnapshot(d=>{ if(d.exists){ S.access={editors:[],viewers:[],...d.data()}; } },()=>{}));
+    unsubs.push(db.doc("config/main").onSnapshot(d=>{ const v=d.exists?d.data():{}; S.cfg={...structuredClone(DEFAULT_CFG),...v,anchors:{...DEFAULT_CFG.anchors,...(v.anchors||{})},lateDed:{...DEFAULT_CFG.lateDed,...(v.lateDed||{})},ot:{...DEFAULT_CFG.ot,...(v.ot||{})}}; S.loaded.cfg=true; soon(); },onErr));
+    unsubs.push(db.collection("staff").onSnapshot(q=>{ S.staff=q.docs.map(d=>({id:d.id,...d.data()})); S.loaded.staff=true; soon(); },onErr));
+    unsubs.push(db.collection("audit").orderBy("day","desc").limit(62).onSnapshot(q=>{ S.audit=q.docs.map(d=>d.data()); S.loaded.audit=true; if((location.hash||"")==="#audit") soon(); },onErr));
+    subRows();
+  });
+})();
+
+</script>
+</body>
+</html>
