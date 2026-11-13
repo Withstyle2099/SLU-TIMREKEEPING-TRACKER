@@ -526,6 +526,18 @@ async function copyHtml(html, text){
     if(d.execCommand("copy")){ sel.removeAllRanges(); toast("Email copied. Paste it into a new Outlook message (Ctrl+V)."); return; } }catch{}
   toast("Copy blocked here. Use Download instead.");
 }
+function b64utf8(str){ const b=new TextEncoder().encode(str); let s=""; for(let i=0;i<b.length;i+=0x8000) s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000)); return btoa(s).replace(/.{76}/g,"$&\r\n"); }
+function encHeader(v){ return /^[\x20-\x7e]*$/.test(v)? v : `=?UTF-8?B?${b64utf8(v).replace(/\r\n/g,"")}?=`; }
+/* Outlook-ready draft: X-Unsent makes Outlook open it as a new message you can edit and send */
+function buildEml(ds, sender, subject){
+  const bd="=_slu_"+Date.now().toString(36);
+  const to=(S.cfg.recipients||"").split(/[;,]\s*/).filter(Boolean).join("; ");
+  return ["X-Unsent: 1", `To: ${to}`, `Subject: ${encHeader(subject)}`, "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${bd}"`, "",
+    `--${bd}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64utf8(mailText(ds)), "",
+    `--${bd}`, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64utf8(mailHtml(ds,sender)), "",
+    `--${bd}--`, ""].join("\r\n");
+}
 function viewMail(){
   const today=riyadhToday(); let ds = S.month===today.slice(0,7)? today : `${S.month}-01`;
   let sender=""; try{ sender=localStorage.getItem("sluSender")||""; }catch{}
@@ -534,16 +546,19 @@ function viewMail(){
   const fr=el("iframe",{id:"mailFrame",title:"Email preview",style:"width:100%;height:760px;border:1px solid var(--line);border-radius:8px;background:#F2F4F6"});
   const link=el("a",{class:"btn",href:"#",text:"Open in Outlook (plain text)"});
   const draw=()=>{ fr.srcdoc=mailHtml(ds,who()); link.href=`mailto:${encodeURIComponent(S.cfg.recipients||"")}?subject=${encodeURIComponent(subj())}&body=${encodeURIComponent(mailText(ds))}`; };
-  const dl=()=>{ const b=new Blob([mailHtml(ds,who())],{type:"text/html"}); const a=el("a",{href:URL.createObjectURL(b),download:`SLU_attendance_${ds}.htm`}); document.body.append(a); a.click(); a.remove(); };
+  const save=(data,type,name)=>{ const a=el("a",{href:URL.createObjectURL(new Blob([data],{type})),download:name}); document.body.append(a); a.click(); a.remove(); };
+  const dl=()=>save(mailHtml(ds,who()),"text/html",`SLU_attendance_${ds}.htm`);
+  const eml=()=>{ save(buildEml(ds,who(),subj()),"message/rfc822",`SLU_daily_attendance_${ds}.eml`); toast("Draft downloaded. Open it: Outlook shows it as a new message ready to send."); };
   const inp=el("input",{type:"date",id:"mailDate",value:ds,min:`${S.month}-01`,max:`${S.month}-${pad(daysIn(S.month))}`,onchange:e=>{ if(e.target.value){ ds=e.target.value; draw(); } }});
   setTimeout(draw);
   return [...statusNotes(), el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Daily attendance email"}),
     el("div",{class:"row"},el("label",{class:"f",for:"mailDate"},"Date",inp),el("label",{class:"f",for:"mailWho"},"Sign as",el("input",{id:"mailWho",size:"20",value:who(),onchange:e=>{ sender=e.target.value.trim(); try{ localStorage.setItem("sluSender",sender); }catch{} draw(); }})),
-      el("button",{class:"btn primary",type:"button",onclick:()=>copyHtml(mailHtml(ds,who()),mailText(ds)),text:"Copy email"}),
+      el("button",{class:"btn primary",type:"button",onclick:eml,text:"Outlook draft (.eml)"}),
+      el("button",{class:"btn",type:"button",onclick:()=>copyHtml(mailHtml(ds,who()),mailText(ds)),text:"Copy email"}),
       el("button",{class:"btn",type:"button",onclick:()=>copy(subj()),text:"Copy subject"}),
       el("button",{class:"btn",type:"button",onclick:dl,text:"Download .htm"}),link)),
     el("div",{class:"card-b"},
-      el("p",{class:"small muted",text:`Copy email, then paste into a new Outlook message: the colours and tables come with it. Recipients from Settings: ${S.cfg.recipients||"none yet"}.`}),fr))];
+      el("p",{class:"small muted",text:`Outlook draft downloads a ready email with recipients, subject and the figures filled in: open it, check it and press Send. Or use Copy email and paste into a new message. Recipients from Settings: ${S.cfg.recipients||"none yet"}.`}),fr))];
 }
 
 async function viewAudit(){
