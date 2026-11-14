@@ -592,10 +592,180 @@ async function copyRich(html,text){
 const saveFile=(data,type,name)=>{ const a=el("a",{href:URL.createObjectURL(new Blob([data],{type})),download:name}); document.body.append(a); a.click(); a.remove(); };
 const store={ get:(k,d="")=>{ try{ const v=localStorage.getItem(k); return v==null?d:v; }catch{ return d; } }, set:(k,v)=>{ try{ localStorage.setItem(k,v); }catch{} } };
 
+/* ---------- A4 PDF report (print layout, Aramco corporate design) ---------- */
+const PDF_THEMES = {
+  corporate: { label:"Corporate (white)" },
+  executive: { label:"Executive (navy cover band)" }
+};
+function svgStackBars(cols, series, opt={}){
+  // cols: [{label, values:[...]}], series: [{name,color}]
+  const W=opt.w||640, Hh=opt.h||190, padL=34, padB=26, padT=10, n=cols.length, max=Math.max(1,...cols.map(c=>c.values.reduce((a,b)=>a+b,0)));
+  const step=Math.ceil(max/4)||1, top=step*4, bw=Math.min(46,(W-padL-10)/n*0.6), gap=(W-padL-10)/n;
+  const y=v=>padT+(Hh-padT-padB)*(1-v/top);
+  let g=""; for(let i=0;i<=4;i++){ const v=step*i, yy=y(v); g+=`<line x1="${padL}" x2="${W-6}" y1="${yy}" y2="${yy}" stroke="#E3E6E9"/><text x="${padL-6}" y="${yy+4}" text-anchor="end" font-size="10" fill="#5F6369">${v}</text>`; }
+  const bars=cols.map((c,i)=>{ let acc=0; const x=padL+gap*i+(gap-bw)/2;
+    const rects=c.values.map((v,k)=>{ if(!v) return ""; const y1=y(acc+v), y0=y(acc); acc+=v; return `<rect x="${x}" y="${y1}" width="${bw}" height="${Math.max(0,y0-y1)}" fill="${series[k].color}"/>`; }).join("");
+    const tot=c.values.reduce((a,b)=>a+b,0);
+    return rects+`<text x="${x+bw/2}" y="${Hh-padB+14}" text-anchor="middle" font-size="10" fill="#323232">${esc(c.label)}</text>`+(tot?`<text x="${x+bw/2}" y="${y(tot)-4}" text-anchor="middle" font-size="9" fill="#5F6369">${tot}</text>`:""); }).join("");
+  const legend=series.map((s,i)=>`<span class="lg"><i style="background:${s.color}"></i>${esc(s.name)}</span>`).join("");
+  return `<svg viewBox="0 0 ${W} ${Hh}" width="100%" role="img" aria-label="${esc(opt.title||"Chart")}">${g}${bars}</svg><div class="legend">${legend}</div>`;
+}
+function pdfHtml({kind, ds, theme, sender, reviewer}){
+  const daily=kind==="daily", start=weekStart(ds), end=addDays(start,6);
+  const title=daily?"Daily attendance report":"Weekly attendance report";
+  const period=daily?fmtDate(ds):`${fmtDate(start)} – ${fmtDate(end)}`;
+  const gen=new Date().toLocaleString("en-GB",{timeZone:"Asia/Riyadh",day:"numeric",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"});
+  const dd=daily?dayData(ds):null, wk=daily?null:weekData(start), t=daily?dd.t:wk.t;
+  const pct=v=>v==null?"–":v+"%";
+  const kpi=(v,l,c,sub)=>`<div class="kpi" style="--k:${c}"><b>${v}</b><span>${l}</span>${sub?`<small>${sub}</small>`:""}</div>`;
+  const kpis=`<div class="kpis">
+    ${kpi(pct(t.rate),"Attendance rate",BR.dgreen,"present + late ÷ expected")}
+    ${kpi(t.P,daily?"Present":"Present days",BR.green,t.auto?`${t.auto} assumed *`:"")}
+    ${kpi(t.late,daily?"Late arrivals":"Late days",BR.amber,t.noot?`${t.noot} with no OT`:"")}
+    ${kpi(t.A+t.S,"Absent / sick",BR.orange,`${t.A} absent · ${t.S} sick`)}
+    ${kpi(t.L+t.T,"Leave / training",BR.blue,`${t.L} leave · ${t.T} training`)}
+    ${kpi(t.ot+" h","Overtime earned",BR.teal,"after late deductions")}
+    ${kpi(t.missing,"Not entered",t.missing?BR.orange:BR.mute,"work days, no code")}
+    ${kpi(daily?t.off:t.duty,daily?"Off (rotation)":"On-duty days",BR.dblue,daily?"rest days":"scheduled, excl. leave")}
+  </div>`;
+  // executive summary sentences
+  const exSum=[];
+  exSum.push(`Attendance rate for the ${daily?"day":"week"} was <b>${pct(t.rate)}</b>${t.duty?` across ${t.duty} scheduled on-duty ${daily?"staff":"staff-days"}`:""}.`);
+  exSum.push(t.late?`<b>${t.late}</b> late arrival${t.late>1?"s":""} were recorded${t.noot?`, ${t.noot} of them over 3 hours (no overtime)`:""}.`:"No late arrivals were recorded.");
+  exSum.push(t.A+t.S?`<b>${t.A+t.S}</b> absence${t.A+t.S>1?"s":""} (${t.A} absent, ${t.S} sick).`:"No absences were recorded.");
+  exSum.push(`<b>${t.ot} h</b> of overtime was earned${t.L+t.T?`; ${t.L+t.T} ${daily?"staff were":"staff-days were"} on leave or training`:""}.`);
+  if(t.missing) exSum.push(`<b class="warn">${t.missing}</b> work ${t.missing>1?"entries are":"entry is"} still to be entered.`);
+
+  let body="";
+  if(daily){
+    const chart=svgStackBars(dd.crews.map(c=>({label:c.cr,values:[c.work?c.P:0,c.work?c.late:0,c.abs,c.away,c.miss]})),
+      [{name:"Present",color:BR.green},{name:"Late",color:BR.amber},{name:"Absent / sick",color:BR.orange},{name:"Leave / training",color:BR.blue},{name:"Not entered",color:"#C0C0C0"}],{title:"Staff by crew",h:150});
+    body+=`<h2>Crew status</h2><div class="cols"><div>${chart}</div></div>
+      <table><thead><tr><th>Crew</th><th>Rotation today</th><th class="c">Staff</th><th class="c">Present</th><th class="c">Late</th><th class="c">Absent</th><th class="c">Leave / trng</th><th class="c">Missing</th><th class="c hi">OT h</th></tr></thead><tbody>
+      ${dd.crews.map(c=>`<tr><td><b>${esc(c.cr)}</b></td><td${c.work?"":` class="mute"`}>${esc(c.label)}</td><td class="c">${c.staff}</td><td class="c">${c.work?c.P:"–"}</td><td class="c">${c.work?c.late:"–"}</td><td class="c">${dash(c.abs)}</td><td class="c">${dash(c.away)}</td><td class="c">${c.miss?`<b class="warn">${c.miss}</b>`:"–"}</td><td class="c hi">${c.ot||"–"}</td></tr>`).join("")}
+      </tbody></table>`;
+    body+=`<h2>Exceptions</h2>`+(dd.exc.length?`<table><thead><tr><th>Employee</th><th>Badge</th><th>Crew</th><th>Status</th><th>Reason / note</th></tr></thead><tbody>
+      ${dd.exc.map(x=>`<tr><td><b>${esc(x.s.name)}</b></td><td>${esc(x.s.badge)}</td><td>${esc(x.s.crew)}</td><td><span class="chip c-${cls(x.c)}">${esc(x.c)}</span> ${esc(CODE_NAME[x.c]||"")}</td><td>${esc(x.why||(x.src?`From ${x.src}`:""))}</td></tr>`).join("")}</tbody></table>`
+      :`<p class="ok">No late arrivals, absences or leave recorded for this day.</p>`);
+    if(dd.missing.length) body+=`<div class="note warnbox"><b>Not entered yet (${dd.missing.length}):</b> ${dd.missing.map(x=>esc(x.s.name)).join("; ")}</div>`;
+  } else {
+    const today=riyadhToday();
+    const chart=svgStackBars(wk.days.map(d=>({label:shortDate(d.ds).replace(/ \w+$/,""),values:d.ds>today?[0,0,0,0]:[d.P,d.late,d.A+d.S,d.L+d.T]})),
+      [{name:"Present",color:BR.green},{name:"Late",color:BR.amber},{name:"Absent / sick",color:BR.orange},{name:"Leave / training",color:BR.blue}],{title:"Attendance by day"});
+    const otChart=svgStackBars(CREWS.map(cr=>({label:cr,values:[wk.people.filter(p=>p.s.crew===cr).reduce((a,p)=>a+p.ot,0)]})),[{name:"Overtime hours earned",color:BR.teal}],{title:"Overtime by crew",h:170});
+    body+=`<h2>Attendance by day</h2><div class="cols two"><div>${chart}</div><div>${otChart}</div></div>
+      <table><thead><tr><th>Day</th><th class="c">On duty</th><th class="c">Present</th><th class="c">Late</th><th class="c">Absent</th><th class="c">Leave / trng</th><th class="c">Missing</th><th class="c">Rate</th><th class="c hi">OT h</th></tr></thead><tbody>
+      ${wk.days.map(d=>{ const fut=d.ds>today, v=x=>fut?"–":dash(x); return `<tr><td><b>${esc(shortDate(d.ds))}</b></td><td class="c">${fut?"–":d.duty}</td><td class="c">${v(d.P)}</td><td class="c">${v(d.late)}</td><td class="c">${v(d.A+d.S)}</td><td class="c">${v(d.L+d.T)}</td><td class="c">${!fut&&d.missing?`<b class="warn">${d.missing}</b>`:"–"}</td><td class="c">${fut?"–":pct(d.rate)}</td><td class="c hi">${fut?"–":(d.ot||"–")}</td></tr>`; }).join("")}
+      <tr class="tot"><td>Total</td><td class="c">${t.duty}</td><td class="c">${t.P}</td><td class="c">${t.late}</td><td class="c">${t.A+t.S}</td><td class="c">${t.L+t.T}</td><td class="c">${t.missing||"–"}</td><td class="c">${pct(t.rate)}</td><td class="c hi">${t.ot}</td></tr></tbody></table>`;
+    let crew=""; body+=`<h2>By employee</h2><table><thead><tr><th>Employee</th><th>Badge</th><th class="c">Work days</th><th class="c">Present</th><th class="c">Late</th><th class="c">Absent</th><th class="c">Leave / trng</th><th class="c">Rate</th><th class="c hi">OT h</th></tr></thead><tbody>
+      ${wk.people.map(p=>{ const h=p.s.crew!==crew?(crew=p.s.crew,`<tr class="grp"><td colspan="9">${esc(crew)}</td></tr>`):""; return h+`<tr><td><b>${esc(p.s.name)}</b></td><td>${esc(p.s.badge)}</td><td class="c">${p.work}</td><td class="c">${dash(p.P)}</td><td class="c">${p.late?`<b class="amber">${p.late}</b>`:"–"}</td><td class="c">${p.A+p.S?`<b class="warn">${p.A+p.S}</b>`:"–"}</td><td class="c">${dash(p.L+p.T)}</td><td class="c">${pct(p.rate)}</td><td class="c hi">${p.ot||"–"}</td></tr>`; }).join("")}</tbody></table>`;
+    body+=`<h2>Exceptions this week</h2>`+(wk.exc.length?`<table><thead><tr><th>Date</th><th>Employee</th><th>Crew</th><th>Status</th><th>Reason / note</th></tr></thead><tbody>
+      ${wk.exc.map(x=>`<tr><td>${esc(shortDate(x.ds))}</td><td><b>${esc(x.s.name)}</b></td><td>${esc(x.s.crew)}</td><td><span class="chip c-${cls(x.c)}">${esc(x.c)}</span></td><td>${esc(x.why||(x.src?`From ${x.src}`:""))}</td></tr>`).join("")}</tbody></table>`
+      :`<p class="ok">No late arrivals, absences or leave recorded this week.</p>`);
+    if(wk.missing.length) body+=`<div class="note warnbox"><b>Not entered yet (${wk.missing.length}):</b> ${wk.missing.map(x=>`${esc(x.s.name)} (${esc(shortDate(x.ds))})`).join("; ")}</div>`;
+  }
+
+  const exec=theme==="executive";
+  const fileName=`SLU_${daily?"Daily":"Weekly"}_Attendance_${daily?ds:start}`;
+  return `<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><title>${esc(fileName)}</title><style>
+  @page{size:A4;margin:16mm 14mm 18mm 14mm;
+    @bottom-left{content:"Saudi Aramco: Company General Use";font:8pt 'Segoe UI',Arial,sans-serif;color:#5F6369}
+    @bottom-right{content:"${esc(S.cfg.unitName).replace(/"/g,"")}  |  ${title}  |  Page " counter(page) " of " counter(pages);font:8pt 'Segoe UI',Arial,sans-serif;color:#5F6369}}
+  *{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+  html{background:#E9ECEF}
+  body{margin:0 auto;max-width:210mm;background:#fff;font:9.5pt/1.45 'Segoe UI',Arial,sans-serif;color:#323232}
+  @media screen{body{margin:16px auto;padding:16mm 14mm;box-shadow:0 2px 12px rgba(0,0,0,.12)} .bar{position:sticky;top:0;z-index:5}}
+  .bar{display:flex;gap:8px;justify-content:flex-end;align-items:center;background:#0033A0;color:#fff;padding:8px 14mm;margin:-16mm -14mm 12mm;font-size:12px}
+  .bar button{font:inherit;font-weight:600;border:0;border-radius:6px;padding:7px 14px;cursor:pointer;background:#84BD00;color:#0b2a00}
+  .bar span{margin-right:auto}
+  @media print{.bar{display:none}}
+  h1,h2,h3{font-family:'Trebuchet MS','Segoe UI',Arial,sans-serif;margin:0}
+  .grad{height:5px;background:linear-gradient(90deg,#84BD00 0%,#84BD00 10%,#00A3E0 90%,#00A3E0 100%)}
+  /* masthead */
+  .mast{position:relative}
+  .mast .org{font-size:8.5pt;color:#5F6369}
+  .mast .brand{position:absolute;right:0;top:0;font:700 10pt 'Trebuchet MS',Arial,sans-serif;color:#5F6369;text-align:right}
+  .mast .brand small{display:block;font:400 7.5pt 'Segoe UI',Arial,sans-serif}
+  .mast h1{font-size:22pt;line-height:1.15;color:#00A3E0;margin-top:4px}
+  .mast .period{font-size:11pt;margin-top:2px}
+  .meta{display:flex;gap:18px;flex-wrap:wrap;font-size:8.5pt;color:#5F6369;margin-top:8px}
+  .meta b{color:#323232;font-weight:600}
+  ${exec?`
+  .mast{background:#0B2D5B;background:linear-gradient(120deg,#0A2348 0%,#0B2D5B 45%,#0033A0 100%);color:#fff;padding:9mm 9mm 7mm;border-radius:6px;overflow:hidden}
+  @media screen{.mast{margin:0 -14mm;padding:12mm 14mm 9mm;border-radius:0}}
+  .mast .org,.mast .brand,.mast .brand small,.meta{color:#CFE3F5}
+  .mast h1{color:#fff;font-size:24pt}
+  .mast .period{color:#E5F5FC}
+  .meta b{color:#fff}
+  .mast:after{content:"";position:absolute;left:0;right:0;bottom:0;height:5px;background:linear-gradient(90deg,#84BD00 0%,#84BD00 10%,#00A3E0 90%,#00A3E0 100%)}
+  .mast .brand{right:9mm;top:8mm}
+  @media screen{.mast .brand{right:14mm;top:10mm}}
+  .mast .ring{position:absolute;right:-30mm;top:-30mm;width:95mm;height:95mm;border-radius:50%;border:14mm solid rgba(132,189,0,.14)}
+  `:`.mast{padding-bottom:8px;border-bottom:0}`}
+  ${exec?"":".mast + .grad{margin-top:6px}"}
+  /* summary */
+  .summary{margin:12px 0 4px;padding:10px 14px;background:#E5F5FC;border-left:4px solid #00A3E0;border-radius:0 6px 6px 0}
+  .summary h3{font-size:10.5pt;color:#0033A0;margin-bottom:4px}
+  .summary p{margin:0}
+  .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin:12px 0}
+  .kpi{border:1px solid #DADADA;border-top:4px solid var(--k);border-radius:6px;padding:7px 9px;break-inside:avoid}
+  .kpi b{display:block;font:700 17pt/1.1 'Trebuchet MS',Arial,sans-serif;color:var(--k)}
+  .kpi span{display:block;font-size:8.5pt;color:#5F6369}
+  .kpi small{display:block;font-size:7.5pt;color:#8A8F95;min-height:11px}
+  h2{font-size:12.5pt;color:#00A3E0;margin:16px 0 7px;padding-left:9px;border-left:4px solid #84BD00;break-after:avoid}
+  .cols{display:grid;gap:12px;margin-bottom:8px;break-inside:avoid}
+  .cols.two{grid-template-columns:1.25fr 1fr}
+  .legend{display:flex;flex-wrap:wrap;gap:4px 12px;font-size:8pt;color:#5F6369;margin-top:2px}
+  .lg i{display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px;vertical-align:-1px}
+  table{width:100%;border-collapse:collapse;font-size:8.5pt;margin-bottom:6px}
+  thead{display:table-header-group}
+  tr{break-inside:avoid}
+  th{background:#00A3E0;color:#fff;font:700 8.5pt 'Trebuchet MS',Arial,sans-serif;text-align:left;padding:5px 6px;border:1px solid #00A3E0}
+  td{padding:4px 6px;border:1px solid #DADADA;vertical-align:top}
+  tbody tr:nth-child(even) td{background:#F7F9FA}
+  .c{text-align:center}
+  td.hi{background:#E5F5FC!important;font-weight:600}
+  th.hi{background:#0033A0;border-color:#0033A0}
+  tr.tot td{font-weight:700;background:#EEF6E0!important;border-top:2px solid #84BD00}
+  tr.grp td{background:#E5F5FC!important;color:#0033A0;font:700 8.5pt 'Trebuchet MS',Arial,sans-serif}
+  .mute{color:#8A8F95}
+  .warn{color:#C2361B}.amber{color:#9A6B00}
+  .ok{color:#00843D;margin:2px 0 8px}
+  .chip{display:inline-block;padding:1px 7px;border-radius:9px;font-weight:700;font-size:8pt}
+  ${Object.entries(CHIP).filter(([k])=>k).map(([k,[bg,fg]])=>`.c-${cls(k)}{background:${bg};color:${fg}}`).join("")}
+  .note{margin:8px 0;padding:8px 12px;border-radius:6px;font-size:8.5pt}
+  .warnbox{background:#FFF4F0;border-left:4px solid #F05F41}
+  .codes{font-size:7.5pt;color:#5F6369;margin-top:10px}
+  .sign{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:20px;break-inside:avoid}
+  .sign div{border-top:1px solid #8A8F95;padding-top:5px;font-size:8.5pt;color:#5F6369}
+  .sign b{display:block;color:#323232;font-size:9pt;min-height:13px}
+  </style></head><body>
+  <div class="bar"><span>Print preview · A4. Choose <b>Save as PDF</b> as the printer.</span><button type="button" onclick="window.print()">Save as PDF</button></div>
+  <header class="mast">${exec?`<div class="ring"></div>`:""}
+    <div class="brand">Saudi Aramco<small>${esc(S.cfg.department)}</small></div>
+    <div class="org">${esc(S.cfg.department)} · ${esc(S.cfg.unitName)}</div>
+    <h1>${esc(title)}</h1>
+    <div class="period">${esc(period)}</div>
+    <div class="meta"><span>Staff: <b>${activeStaff().length}</b></span><span>Crews: <b>${CREWS.join(", ")}</b></span><span>Generated: <b>${esc(gen)}</b></span></div>
+  </header>
+  ${exec?`<div style="height:10px"></div>`:`<div class="grad"></div>`}
+  <section class="summary"><h3>Summary</h3><p>${exSum.join(" ")}</p></section>
+  ${kpis}
+  ${body}
+  <div class="codes"><b>Codes:</b> P present · LT1/LT2/LT3 late up to 1 / 2 / 3 h (overtime reduced by the same hours) · NO OT late over 3 h, no overtime · A absent · S sick leave · L leave · T training.${autoOn()?" * Past work days with no entry are counted as present (P).":""}</div>
+  <div class="sign"><div><b>${esc(sender||"")}</b>Prepared by</div><div><b>${esc(reviewer||"")}</b>Reviewed by (supervisor)</div><div><b></b>Date / signature</div></div>
+  </body></html>`;
+}
+function openPdf(opts){
+  const w=window.open("","_blank"); if(!w){ toast("Allow pop-ups for this site to save the PDF"); return; }
+  w.document.open(); w.document.write(pdfHtml(opts)); w.document.close(); w.focus();
+  setTimeout(()=>{ try{ w.print(); }catch{} },600);
+}
+
 function viewMail(){
   const today=riyadhToday();
   const st={ kind: store.get("sluKind","daily"), ds: S.month===today.slice(0,7)?today:`${S.month}-01`,
-    to: store.get("sluTo",S.cfg.recipients||""), cc: store.get("sluCc",S.cfg.cc||""), sender: store.get("sluSender",(S.me&&S.me.name)||""), subject:"", intro:"", introEdited:false, subjEdited:false };
+    to: store.get("sluTo",S.cfg.recipients||""), theme: store.get("sluTheme","corporate"), reviewer: store.get("sluReviewer",""), cc: store.get("sluCc",S.cfg.cc||""), sender: store.get("sluSender",(S.me&&S.me.name)||""), subject:"", intro:"", introEdited:false, subjEdited:false };
   const start=()=>weekStart(st.ds);
   const period=()=> st.kind==="daily"? fmtDate(st.ds) : `${fmtDate(start())} – ${fmtDate(addDays(start(),6))}`;
   const title=()=> st.kind==="daily"?"Daily attendance report":"Weekly attendance report";
@@ -619,7 +789,7 @@ function viewMail(){
     el("option",{value:"daily",selected:st.kind==="daily"?true:null},"Daily report"),el("option",{value:"weekly",selected:st.kind==="weekly"?true:null},"Weekly report"));
   const dateInp=el("input",{type:"date",id:"mailDate",value:st.ds,onchange:e=>{ if(e.target.value){ st.ds=e.target.value; st.introEdited=false; st.subjEdited=false; rebuild(); } }});
   const dateLbl=el("label",{class:"f",for:"mailDate"},"Date",dateInp);
-  const field=(id,label,val,key,ph)=>el("label",{class:"f",for:id,style:"flex:1 1 240px"},label,el("input",{id,value:val,placeholder:ph||"",style:"width:100%",onchange:e=>{ st[key]=e.target.value.trim(); if(key==="to") store.set("sluTo",st[key]); if(key==="cc") store.set("sluCc",st[key]); if(key==="sender"){ store.set("sluSender",st[key]); draw(); } }}));
+  const field=(id,label,val,key,ph)=>el("label",{class:"f",for:id,style:"flex:1 1 240px"},label,el("input",{id,value:val,placeholder:ph||"",style:"width:100%",onchange:e=>{ st[key]=e.target.value.trim(); if(key==="to") store.set("sluTo",st[key]); if(key==="cc") store.set("sluCc",st[key]); if(key==="sender"){ store.set("sluSender",st[key]); draw(); } if(key==="reviewer") store.set("sluReviewer",st[key]); }}));
   const subjBox=el("input",{id:"mSubj",style:"width:100%",oninput:e=>{ st.subject=e.target.value; st.subjEdited=true; }});
   const introBox=el("textarea",{id:"mIntro",rows:"3",style:"width:100%",oninput:e=>{ st.intro=e.target.value; st.introEdited=true; },onchange:()=>{ edited=false; fr.srcdoc=html(); }});
 
@@ -631,7 +801,9 @@ function viewMail(){
   };
   const copyEmail=async()=>toast(await copyRich(currentHtml(),text())?"Email copied. Paste it into Outlook with Ctrl+V.":"Copy blocked here. Use Outlook draft instead.");
   const eml=()=>{ saveFile(buildEml({to:st.to,cc:st.cc,subject:st.subject,html:currentHtml(),text:text()}),"message/rfc822",`SLU_${st.kind}_attendance_${st.kind==="daily"?st.ds:start()}.eml`); toast("Draft downloaded. Open it to send from Outlook."); };
-  const print=()=>{ const w=window.open("","_blank"); if(!w){ toast("Allow pop-ups to print"); return; } w.document.write(currentHtml()); w.document.close(); w.focus(); setTimeout(()=>w.print(),400); };
+  const savePdf=()=>openPdf({kind:st.kind,ds:st.ds,theme:st.theme,sender:st.sender,reviewer:st.reviewer});
+  const themeSel=el("select",{id:"rTheme",onchange:e=>{ st.theme=e.target.value; store.set("sluTheme",st.theme); }},
+    ...Object.entries(PDF_THEMES).map(([k,v])=>el("option",{value:k,selected:st.theme===k?true:null},v.label)));
   const reset=()=>{ st.introEdited=false; st.subjEdited=false; draw(); toast("Email rebuilt from the latest data"); };
 
   setTimeout(rebuild);
@@ -639,14 +811,16 @@ function viewMail(){
     el("div",{class:"card-h"},el("h2",{text:"Attendance report email"}),
       el("div",{class:"row"},el("label",{class:"f",for:"rKind"},"Report",kindSel),dateLbl)),
     el("div",{class:"card-b",style:"display:grid;gap:10px"},
-      el("div",{class:"row",style:"align-items:flex-end"},field("mTo","To",st.to,"to","name@aramco.com; name2@aramco.com"),field("mCc","CC",st.cc,"cc","optional"),field("mWho","Sign as",st.sender,"sender")),
+      el("div",{class:"row",style:"align-items:flex-end"},field("mTo","To",st.to,"to","name@aramco.com; name2@aramco.com"),field("mCc","CC",st.cc,"cc","optional"),field("mWho","Sign as",st.sender,"sender"),field("mRev","Reviewed by (PDF)",st.reviewer,"reviewer","supervisor name")),
       el("label",{class:"f",for:"mSubj"},"Subject",subjBox),
       el("label",{class:"f",for:"mIntro"},"Opening message",introBox),
       el("div",{class:"row"},
         el("button",{class:"btn primary",type:"button",onclick:sendOutlook,text:"Send with Outlook"}),
         el("button",{class:"btn",type:"button",onclick:copyEmail,text:"Copy email"}),
         el("button",{class:"btn",type:"button",onclick:eml,text:"Outlook draft (.eml)"}),
-        el("button",{class:"btn",type:"button",onclick:print,text:"Print / PDF"}),
+        el("span",{style:"flex:1"}),
+        el("label",{class:"f",for:"rTheme"},"PDF design",themeSel),
+        el("button",{class:"btn primary",type:"button",onclick:savePdf,text:"Save as PDF"}),
         el("button",{class:"btn",type:"button",onclick:reset,text:"Rebuild from data"})),
       el("p",{class:"small muted",text:"Send with Outlook opens a new Outlook message with To, CC and Subject filled in and puts the formatted report on your clipboard: click in the message body, press Ctrl+V and Send. You can also click anywhere in the preview below and edit the text before sending."}),
       fr))];
