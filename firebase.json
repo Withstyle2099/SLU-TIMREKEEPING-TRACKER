@@ -1,7 +1,24 @@
 {
   "hosting": {
     "public": ".",
-    "ignore": ["firebase.json", "README.md", "**/.*"],
-    "headers": [{ "source": "**", "headers": [{ "key": "Cache-Control", "value": "no-cache" }] }]
+    "ignore": [
+      "firebase.json",
+      "README.md",
+      ".git",
+      ".git/**",
+      "**/.git/**",
+      "**/.*"
+    ],
+    "headers": [
+      {
+        "source": "**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache"
+          }
+        ]
+      }
+    ]
   }
 }
