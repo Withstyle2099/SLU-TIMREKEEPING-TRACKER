@@ -114,6 +114,7 @@ td.cell.off button{background:var(--off);color:var(--off-ink);font-size:9px}
 td.cell.miss button{background:var(--miss)}
 td.cell.due button{background:var(--warn)}
 td.cell button[disabled]{cursor:default}
+td.cell.auto button{opacity:.55;font-style:italic}
 .tot{min-width:46px;font-variant-numeric:tabular-nums}
 .tot.h{background:var(--tint);font-weight:600;color:var(--blue-deep)}
 tfoot td,tfoot th{background:var(--zebra);font-weight:600}
@@ -178,7 +179,7 @@ pre.mail{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);
   <nav class="tabs" aria-label="Sections">
     <a href="#timesheet">Timesheet</a>
     <a href="#overtime">Overtime</a>
-    <a href="#daily-email">Daily email</a>
+    <a href="#daily-email">Reports</a>
     <a href="#audit">Audit log</a>
     <a href="#staff">Staff</a>
     <a href="#config">Settings</a>
@@ -232,7 +233,7 @@ const DEFAULT_CFG = {
   anchors:{"R-35 A":"2026-11-08","R-35 B":"2026-11-01","R-31 D":"2026-11-09","R-31 E":"2026-11-02","R-31 F":"2026-11-16"},
   lateDed:{LT1:1,LT2:2,LT3:3},
   ot:{long:[2,3,3,3,1,0,0], short:[2,1,1,3,0,0,0], r31:[2,4,4,4,4,4,12]},
-  recipients:""
+  recipients:"", cc:"", autoPresent:true
 };
 const cls = c => "code-" + (c||"").replace(/\s/g,"");
 const pad = n => String(n).padStart(2,"0");
@@ -266,7 +267,7 @@ function otFor(crew,ds,code,cfg){
 }
 
 /* ---------------- state ---------------- */
-const S = { db:null, user:null, me:null, access:{editors:[],viewers:[]}, noAccess:false, canWrite:null, isOwner:false,
+const S = { cache:{}, db:null, user:null, me:null, access:{editors:[],viewers:[]}, noAccess:false, canWrite:null, isOwner:false,
   cfg: structuredClone(DEFAULT_CFG), staff:[], rows:{}, audit:[], month:"2026-11",
   loaded:{cfg:false,staff:false,rows:false,audit:false}, err:"", slow:false, readOnly:false, ready:false };
 let unsubRows=null;
@@ -287,6 +288,21 @@ function toast(msg){ const t=el("div",{class:"toast",role:"status",text:msg}); d
 async function copy(text){ try{ await navigator.clipboard.writeText(text); toast("Copied"); }catch{ toast("Copy blocked here. Select the text and press Ctrl+C."); } }
 const activeStaff = () => S.staff.filter(s=>s.active!==false).sort((a,b)=>CREWS.indexOf(a.crew)-CREWS.indexOf(b.crew)||(a.order||0)-(b.order||0));
 const dayRec = (eid,dd) => ((S.rows[eid]||{}).days||{})[dd] || null;
+/* rows for any month: the open month is live, others are fetched once for reports */
+const rowsOf = m => m===S.month ? S.rows : (S.cache[m]||{});
+const recFor = (eid,ds) => ((rowsOf(ds.slice(0,7))[eid]||{}).days||{})[ds.slice(8)] || null;
+const autoOn = () => S.cfg.autoPresent!==false;
+/* effective code: an entered code wins (L/T from the SAP plan included); a past work day with nothing entered counts as P */
+function eff(s,ds,today=riyadhToday()){
+  const r=recFor(s.id,ds); if(r&&r.c) return {c:r.c,r,auto:false};
+  if(autoOn() && ds<today && isWork(s.crew,ds,S.cfg)) return {c:"P",r,auto:true};
+  return {c:"",r,auto:false};
+}
+async function ensureMonths(ms){
+  const need=ms.filter(m=>m!==S.month&&!S.cache[m]); if(!need.length||!S.db) return false;
+  await Promise.all(need.map(async m=>{ const q=await S.db.collection(`months/${m}/rows`).get(); const o={}; q.docs.forEach(d=>o[d.id]=d.data()); S.cache[m]=o; }));
+  return true;
+}
 const nameCache={};
 async function names(ids){
   const u=[...new Set(ids.filter(Boolean))]; if(!S.db||!u.length) return {};
@@ -304,9 +320,9 @@ function monthStats(){
   const m=S.month, n=daysIn(m), today=riyadhToday();
   const per={}; const daily=Array.from({length:n},()=>({duty:0,present:0,late:0,absent:0,missing:0}));
   for(const s of activeStaff()){
-    const t={P:0,late:0,noot:0,A:0,S:0,L:0,T:0,ot:0,duty:0,missing:0};
+    const t={P:0,auto:0,late:0,noot:0,A:0,S:0,L:0,T:0,ot:0,duty:0,missing:0};
     for(let d=1; d<=n; d++){
-      const ds=`${m}-${pad(d)}`, dd=pad(d), r=dayRec(s.id,dd), c=r?r.c:"", work=isWork(s.crew,ds,S.cfg);
+      const ds=`${m}-${pad(d)}`, e=eff(s,ds,today), c=e.c, work=isWork(s.crew,ds,S.cfg); if(e.auto) t.auto++;
       if(c==="P") t.P++; if(["LT1","LT2","LT3","NO OT"].includes(c)) t.late++; if(c==="NO OT") t.noot++;
       if(c==="A") t.A++; if(c==="S") t.S++; if(c==="L") t.L++; if(c==="T") t.T++;
       t.ot += otFor(s.crew,ds,c,S.cfg);
@@ -349,10 +365,11 @@ function viewTimesheet(){
     kpi("Absent / sick",`${st.tot.A} / ${st.tot.S}`,"bad"),
     kpi("Attendance rate",st.tot.rate==null?"–":st.tot.rate+"%","good"),
     kpi("Overtime hours",st.tot.ot),
-    kpi("Entries missing to date",st.tot.missing,st.tot.missing?"bad":"good"));
+    kpi(autoOn()?"Not entered today":"Entries missing to date",st.tot.missing,st.tot.missing?"bad":"good"));
 
   const legend=el("div",{class:"legend"},
     ...["P","LT1","LT2","LT3","NO OT","A","S","L","T","OFF"].map(c=>el("span",{},el("i",{class:"chip "+cls(c),text:c}),c==="OFF"?"Day off (rotation)":CODE_NAME[c])),
+    autoOn()?el("span",{},el("i",{class:"chip code-P",style:"opacity:.55;font-style:italic",text:"P"}),"Assumed present (no entry)"):null,
     el("span",{},el("i",{class:"chip",style:"background:var(--warn)",text:" "}),"Due today"),
     el("span",{},el("i",{class:"chip",style:"background:var(--miss)",text:" "}),"Missing"));
 
@@ -373,11 +390,11 @@ function viewTimesheet(){
       const t=st.per[s.id];
       const tr=el("tr",{},el("th",{class:"who",scope:"row"},el("b",{text:s.name}),el("small",{text:`${s.badge} · ${s.title}`})));
       for(let d=1; d<=n; d++){
-        const dd=pad(d), ds=`${m}-${dd}`, r=dayRec(s.id,dd), c=r?r.c:"", work=isWork(s.crew,ds,S.cfg);
-        let k="cell"; if(!work&&!c) k+=" off"; else if(work&&!c&&ds<today) k+=" miss"; else if(work&&!c&&ds===today) k+=" due";
+        const dd=pad(d), ds=`${m}-${dd}`, e=eff(s,ds,today), r=e.r, c=e.c, work=isWork(s.crew,ds,S.cfg);
+        let k="cell"; if(!work&&!c) k+=" off"; else if(work&&!c&&ds<today) k+=" miss"; else if(work&&!c&&ds===today) k+=" due"; if(e.auto) k+=" auto";
         const label = c || (work?"":"OFF");
-        const btn=el("button",{type:"button",class:c?cls(c):"","aria-label":`${s.name}, ${fmtDate(ds)}: ${c?CODE_NAME[c]:work?"not entered":"day off"}`,disabled:S.readOnly||!S.db?true:null,onclick:()=>openCell(s,ds)},label);
-        if(r) btn.title = r.src ? `From ${r.src}` : "Changed — open to see who";
+        const btn=el("button",{type:"button",class:c?cls(c):"","aria-label":`${s.name}, ${fmtDate(ds)}: ${c?CODE_NAME[c]+(e.auto?" (assumed, no entry)":""):work?"not entered":"day off"}`,disabled:S.readOnly||!S.db?true:null,onclick:()=>openCell(s,ds)},label);
+        if(e.auto) btn.title="Assumed present: no entry was made for this work day"; else if(r) btn.title = r.src ? `From ${r.src}` : "Changed — open to see who";
         tr.append(el("td",{class:k},btn));
       }
       tr.append(...[t.P,t.late,t.noot,t.A,t.S,t.L,t.T,t.rate==null?"–":t.rate+"%"].map(v=>el("td",{class:"tot",text:v})), el("td",{class:"tot h",text:t.ot}));
@@ -399,7 +416,7 @@ function tsv(){
   const m=S.month,n=daysIn(m),st=monthStats();
   const rows=[["Crew","Badge","Name",...Array.from({length:n},(_,i)=>String(i+1)),"P","Late","NO OT","A","S","L","T","OT h"]];
   for(const s of activeStaff()){ const t=st.per[s.id];
-    rows.push([s.crew,s.badge,s.name,...Array.from({length:n},(_,i)=>{ const ds=`${m}-${pad(i+1)}`, r=dayRec(s.id,pad(i+1)); return r?r.c:(isWork(s.crew,ds,S.cfg)?"":"OFF"); }),t.P,t.late,t.noot,t.A,t.S,t.L,t.T,t.ot]); }
+    rows.push([s.crew,s.badge,s.name,...Array.from({length:n},(_,i)=>{ const ds=`${m}-${pad(i+1)}`, e=eff(s,ds); return e.c||(isWork(s.crew,ds,S.cfg)?"":"OFF"); }),t.P,t.late,t.noot,t.A,t.S,t.L,t.T,t.ot]); }
   return rows.map(r=>r.join("\t")).join("\n");
 }
 
@@ -420,146 +437,218 @@ function viewOvertime(){
       el("p",{class:"small muted",text:`Day 1 is the first working day after the days off. On a worked day, LT1, LT2 and LT3 take off ${ld.LT1}, ${ld.LT2} and ${ld.LT3} h (never below 0). NO OT, absent, sick, leave, training and days off earn 0 h. Change these on the Settings tab.`}))))];
 }
 
-/* ---------- daily email (Outlook-safe HTML, Aramco brand palette) ---------- */
+/* ---------- attendance reports: daily + weekly (Outlook-safe HTML, Aramco brand palette) ---------- */
 const esc = s => String(s==null?"":s).replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-const BR = {green:"#84BD00",blue:"#00A3E0",dgreen:"#00843D",dblue:"#0033A0",gray:"#5F6369",ink:"#323232",line:"#DADADA",tint:"#E5F5FC",orange:"#F05F41",yellow:"#FFC846",teal:"#26A8AB",purple:"#643278"};
+const BR = {green:"#84BD00",blue:"#00A3E0",dgreen:"#00843D",dblue:"#0033A0",gray:"#5F6369",ink:"#323232",line:"#DADADA",tint:"#E5F5FC",orange:"#F05F41",yellow:"#FFC846",teal:"#26A8AB",purple:"#643278",amber:"#E0A800",mute:"#8A8F95"};
 const CHIP = {P:["#E8F4D0","#3D5C00"],LT1:["#FFF3D1","#7A5300"],LT2:["#FFE9B0","#7A4F00"],LT3:["#FFDDA0","#7A4300"],"NO OT":["#FDDAD2","#9A2A10"],A:["#FDDAD2","#9A2A10"],S:["#F3E0EC","#643278"],L:["#E5F5FC","#00618A"],T:["#ECE4F3","#643278"],"":["#FFF1EC","#B03A1E"]};
-function dayData(ds){
-  const dd=ds.slice(8), sameMonth=S.month===ds.slice(0,7), act=activeStaff();
-  const rows=act.map(s=>{ const r=sameMonth?dayRec(s.id,dd):null; const c=r?r.c:""; const work=isWork(s.crew,ds,S.cfg);
-    return {s,c,why:r&&r.why||"",src:r&&r.src||"",work,ot:otFor(s.crew,ds,c,S.cfg)}; });
-  const n=k=>rows.filter(x=>x.c===k).length;
-  const late=["LT1","LT2","LT3","NO OT"].reduce((a,k)=>a+n(k),0);
-  const t={P:n("P"),late,A:n("A"),S:n("S"),L:n("L"),T:n("T"),off:rows.filter(x=>!x.c&&!x.work).length,missing:rows.filter(x=>!x.c&&x.work).length,ot:rows.reduce((a,x)=>a+x.ot,0)};
-  const base=t.P+t.late+t.A+t.S; t.rate=base?Math.round(100*(t.P+t.late)/base):null; t.duty=rows.filter(x=>x.work&&!["L","T"].includes(x.c)).length;
-  const crews=CREWS.map(cr=>{ const rs=rows.filter(x=>x.s.crew===cr); const work=isWork(cr,ds,S.cfg); const wt=weekType(cr,ds,S.cfg);
-    return {cr,work,label: work?`Day ${blockDay(cr,ds,S.cfg)}${wt?` · ${wt} week`:""}`:"Off (rotation)", staff:rs.length,
-      P:rs.filter(x=>x.c==="P").length, late:rs.filter(x=>["LT1","LT2","LT3","NO OT"].includes(x.c)).length,
-      abs:rs.filter(x=>x.c==="A"||x.c==="S").length, away:rs.filter(x=>x.c==="L"||x.c==="T").length,
-      miss:rs.filter(x=>!x.c&&x.work).length, ot:rs.reduce((a,x)=>a+x.ot,0)}; });
-  const order=["NO OT","LT3","LT2","LT1","A","S","L","T"];
-  const exc=rows.filter(x=>order.includes(x.c)).sort((a,b)=>order.indexOf(a.c)-order.indexOf(b.c)||CREWS.indexOf(a.s.crew)-CREWS.indexOf(b.s.crew));
-  const missing=rows.filter(x=>!x.c&&x.work);
-  return {t,crews,exc,missing};
+const LATE = ["LT1","LT2","LT3","NO OT"];
+const addDays = (ds,n) => new Date(Date.parse(ds+"T00:00:00Z")+n*DAY).toISOString().slice(0,10);
+const weekStart = ds => addDays(ds,-wd(ds));            // Sunday of the week that holds ds
+const shortDate = ds => new Date(ds+"T00:00:00Z").toLocaleDateString("en-GB",{weekday:"short",day:"numeric",month:"short",timeZone:"UTC"});
+
+/* one employee-day: one row per person per date, with assumed presence applied */
+function dayRows(ds){
+  const today=riyadhToday();
+  return activeStaff().map(s=>{ const e=eff(s,ds,today);
+    return {s,ds,c:e.c,auto:e.auto,why:e.r&&e.r.why||"",src:e.r&&e.r.src||"",work:isWork(s.crew,ds,S.cfg),ot:otFor(s.crew,ds,e.c,S.cfg)}; });
 }
-function gradientBar(h){ // stepped green->blue bar: flat ends 0-10% / 90-100%, Outlook-safe table cells
+function tally(rows){
+  const n=k=>rows.filter(x=>x.c===k).length;
+  const t={P:n("P"),auto:rows.filter(x=>x.auto).length,late:rows.filter(x=>LATE.includes(x.c)).length,noot:n("NO OT"),A:n("A"),S:n("S"),L:n("L"),T:n("T"),
+    off:rows.filter(x=>!x.c&&!x.work).length,missing:rows.filter(x=>!x.c&&x.work).length,ot:rows.reduce((a,x)=>a+x.ot,0),
+    duty:rows.filter(x=>x.work&&!["L","T"].includes(x.c)).length};
+  const base=t.P+t.late+t.A+t.S; t.rate=base?Math.round(100*(t.P+t.late)/base):null; return t;
+}
+const EXC_ORDER=["NO OT","LT3","LT2","LT1","A","S","L","T"];
+function dayData(ds){
+  const rows=dayRows(ds), t=tally(rows);
+  const crews=CREWS.map(cr=>{ const rs=rows.filter(x=>x.s.crew===cr), work=isWork(cr,ds,S.cfg), wt=weekType(cr,ds,S.cfg), k=tally(rs);
+    return {cr,work,label:work?`Day ${blockDay(cr,ds,S.cfg)}${wt?` · ${wt} week`:""}`:"Off (rotation)",staff:rs.length,P:k.P,late:k.late,abs:k.A+k.S,away:k.L+k.T,miss:k.missing,ot:k.ot}; });
+  const exc=rows.filter(x=>EXC_ORDER.includes(x.c)).sort((a,b)=>EXC_ORDER.indexOf(a.c)-EXC_ORDER.indexOf(b.c)||CREWS.indexOf(a.s.crew)-CREWS.indexOf(b.s.crew));
+  return {t,crews,exc,missing:rows.filter(x=>!x.c&&x.work)};
+}
+function weekData(start){
+  const dates=Array.from({length:7},(_,i)=>addDays(start,i));
+  const byDay=dates.map(ds=>({ds,rows:dayRows(ds)})); const all=byDay.flatMap(d=>d.rows);
+  const t=tally(all);
+  const days=byDay.map(d=>({ds:d.ds,...tally(d.rows)}));
+  const people=activeStaff().map(s=>{ const rs=all.filter(x=>x.s.id===s.id); return {s,...tally(rs),work:rs.filter(x=>x.work).length}; });
+  const exc=all.filter(x=>EXC_ORDER.includes(x.c)).sort((a,b)=>a.ds.localeCompare(b.ds)||EXC_ORDER.indexOf(a.c)-EXC_ORDER.indexOf(b.c));
+  return {dates,t,days,people,exc,missing:all.filter(x=>!x.c&&x.work)};
+}
+
+/* ---- HTML building blocks (tables + inline styles only, so Outlook keeps the layout) ---- */
+const F="font-family:'Segoe UI',Arial,sans-serif", H="font-family:'Trebuchet MS','Segoe UI',Arial,sans-serif";
+function gradientBar(h){
   const a=[0x84,0xBD,0x00], b=[0x00,0xA3,0xE0], N=20;
   const cells=Array.from({length:N},(_,i)=>{ const p=(i+0.5)/N, f=p<=.1?0:p>=.9?1:(p-.1)/.8; const c=a.map((v,k)=>Math.round(v+(b[k]-v)*f).toString(16).padStart(2,"0")).join("");
     return `<td width="5%" height="${h}" style="background:#${c};font-size:0;line-height:0;mso-line-height-rule:exactly">&nbsp;</td>`; }).join("");
   return `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse"><tr>${cells}</tr></table>`;
 }
-function mailHtml(ds, preparedBy){
-  const {t,crews,exc,missing}=dayData(ds);
-  const F="font-family:'Segoe UI',Arial,sans-serif", H="font-family:'Trebuchet MS','Segoe UI',Arial,sans-serif";
-  const tile=(val,label,color,sub)=>`<td width="25%" valign="top" style="padding:6px">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:#FFFFFF;border:1px solid ${BR.line};border-top:4px solid ${color}">
-      <tr><td style="padding:10px 12px 2px;${H};font-size:26px;line-height:30px;font-weight:bold;color:${color}">${val}</td></tr>
-      <tr><td style="padding:0 12px 10px;${F};font-size:12px;line-height:16px;color:${BR.gray}">${label}${sub?`<br><span style="font-size:11px;color:#8A8F95">${sub}</span>`:""}</td></tr>
-    </table></td>`;
-  const chip=c=>{ const [bg,fg]=CHIP[c]||CHIP[""]; return `<span style="display:inline-block;background:${bg};color:${fg};${F};font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;white-space:nowrap">${esc(c||"Not entered")}</span>`; };
-  const th=(x,al="left")=>`<th align="${al}" style="${H};font-size:12px;font-weight:bold;color:#FFFFFF;background:${BR.blue};padding:7px 8px;border:1px solid ${BR.blue}">${x}</th>`;
-  const td=(x,al="left",extra="")=>`<td align="${al}" style="${F};font-size:12px;line-height:16px;color:${BR.ink};padding:6px 8px;border:1px solid ${BR.line};${extra}">${x}</td>`;
-  const crewRows=crews.map((c,i)=>`<tr style="background:${i%2?"#F7F9FA":"#FFFFFF"}">${td(`<b>${esc(c.cr)}</b>`)}${td(c.work?esc(c.label):`<span style="color:#8A8F95">${esc(c.label)}</span>`)}${td(c.staff,"center")}${td(c.work?c.P:"–","center")}${td(c.work?c.late:"–","center")}${td(c.abs||"–","center")}${td(c.away||"–","center")}${td(c.miss?`<b style="color:${BR.orange}">${c.miss}</b>`:"–","center")}${td(c.ot?`<b>${c.ot}</b>`:"–","center",`background:${BR.tint}`)}</tr>`).join("");
-  const excRows=exc.map((x,i)=>`<tr style="background:${i%2?"#F7F9FA":"#FFFFFF"}">${td(`<b>${esc(x.s.name)}</b><br><span style="color:${BR.gray};font-size:11px">${esc(x.s.badge)} · ${esc(x.s.title||"")}</span>`)}${td(esc(x.s.crew))}${td(chip(x.c))}${td(esc(x.why||(x.src?`From ${x.src}`:""))||"&nbsp;")}</tr>`).join("");
-  const sect=(title,body)=>`<tr><td style="padding:22px 28px 6px">
-      <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr>
-        <td width="4" style="background:${BR.green};font-size:0">&nbsp;</td>
-        <td style="padding-left:10px;${H};font-size:16px;font-weight:bold;color:${BR.blue}">${title}</td></tr></table></td></tr>
-    <tr><td style="padding:6px 28px 0">${body}</td></tr>`;
-  const rateTxt = t.rate==null?"–":t.rate+"%";
-  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"></head>
+const tile=(val,label,color,sub)=>`<td width="25%" valign="top" style="padding:6px">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:#FFFFFF;border:1px solid ${BR.line};border-top:4px solid ${color}">
+    <tr><td style="padding:10px 12px 2px;${H};font-size:26px;line-height:30px;font-weight:bold;color:${color}">${val}</td></tr>
+    <tr><td style="padding:0 12px 10px;${F};font-size:12px;line-height:16px;color:${BR.gray}">${label}<br><span style="font-size:11px;color:${BR.mute}">${sub||"&nbsp;"}</span></td></tr>
+  </table></td>`;
+const tiles=list=>`<tr><td style="padding:14px 22px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">${
+  [list.slice(0,4),list.slice(4,8)].map(r=>`<tr>${r.map(x=>tile(...x)).join("")}</tr>`).join("")}</table></td></tr>`;
+const chip=(c,auto)=>{ const [bg,fg]=CHIP[c]||CHIP[""]; return `<span style="display:inline-block;background:${bg};color:${fg};${F};font-size:11px;font-weight:600;padding:2px 8px;border-radius:10px;white-space:nowrap">${esc(c||"Not entered")}${auto?" *":""}</span>`; };
+const th=(x,al="left")=>`<th align="${al}" style="${H};font-size:12px;font-weight:bold;color:#FFFFFF;background:${BR.blue};padding:7px 8px;border:1px solid ${BR.blue}">${x}</th>`;
+const td=(x,al="left",extra="")=>`<td align="${al}" style="${F};font-size:12px;line-height:16px;color:${BR.ink};padding:6px 8px;border:1px solid ${BR.line};${extra}">${x}</td>`;
+const zebra=i=>`background:${i%2?"#F7F9FA":"#FFFFFF"}`;
+const table=(head,rows)=>`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse"><tr>${head}</tr>${rows}</table>`;
+const sect=(title,body)=>`<tr><td style="padding:22px 28px 6px">
+    <table role="presentation" cellpadding="0" cellspacing="0" border="0"><tr><td width="4" style="background:${BR.green};font-size:0">&nbsp;</td>
+      <td style="padding-left:10px;${H};font-size:16px;font-weight:bold;color:${BR.blue}">${title}</td></tr></table></td></tr>
+  <tr><td style="padding:6px 28px 0">${body}</td></tr>`;
+const callout=(html,bg,edge)=>`<tr><td style="padding:16px 28px 0"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:${bg};border-left:4px solid ${edge}">
+  <tr><td style="padding:10px 14px;${F};font-size:12px;line-height:18px;color:${BR.ink}">${html}</td></tr></table></td></tr>`;
+const dash=v=>v?v:"–";
+function shell({title,period,intro,body,sender}){
+  const introHtml=esc(intro||"").split(/\n{2,}/).map(p=>`<p style="margin:0 0 10px">${p.replace(/\n/g,"<br>")}</p>`).join("");
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>${esc(title)}</title></head>
 <body style="margin:0;padding:0;background:#F2F4F6">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background:#F2F4F6"><tr><td align="center" style="padding:16px 8px">
 <table role="presentation" width="680" cellpadding="0" cellspacing="0" border="0" style="width:680px;max-width:100%;background:#FFFFFF;border:1px solid ${BR.line};border-collapse:collapse">
   <tr><td>${gradientBar(6)}</td></tr>
-  <tr><td style="padding:22px 28px 4px">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-      <td valign="top">
-        <div style="${F};font-size:12px;color:${BR.gray};letter-spacing:.2px">${esc(S.cfg.department)} · ${esc(S.cfg.unitName)}</div>
-        <div style="${H};font-size:26px;line-height:32px;font-weight:bold;color:${BR.blue};padding-top:2px">Daily attendance report</div>
-        <div style="${F};font-size:14px;color:${BR.ink};padding-top:2px">${esc(fmtDate(ds))}</div>
-      </td>
-      <td valign="top" align="right" style="${F};font-size:12px;color:${BR.gray};white-space:nowrap">Saudi Aramco</td>
-    </tr></table>
-  </td></tr>
-  <tr><td style="padding:14px 22px 0">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-      ${tile(t.P,"Present",BR.green,"on time")}${tile(t.late,"Late arrivals","#E0A800","LT1–LT3 / no OT")}${tile(t.A+t.S,"Absent / sick",BR.orange,"A + S codes")}${tile(t.L+t.T,"Leave / training",BR.blue,"L + T codes")}
-    </tr><tr>
-      ${tile(rateTxt,"Attendance rate",BR.dgreen,"of staff expected")}${tile(t.ot+" h","Overtime earned",BR.teal,"after late deductions")}${tile(t.off,"Off (rotation)","#8A8F95","rest days")}${tile(t.missing,"Not entered yet",t.missing?BR.orange:"#8A8F95","work days, no code")}
-    </tr></table>
-  </td></tr>
-  ${sect("Crew status",`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">
-      <tr>${th("Crew")}${th("Rotation today")}${th("Staff","center")}${th("Present","center")}${th("Late","center")}${th("Absent","center")}${th("Leave / trng","center")}${th("Missing","center")}${th("OT h","center")}</tr>${crewRows}</table>`)}
-  ${sect("Exceptions",exc.length?`<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse">
-      <tr>${th("Employee")}${th("Crew")}${th("Status")}${th("Reason / note")}</tr>${excRows}</table>`
-      :`<div style="${F};font-size:13px;color:${BR.dgreen};padding:4px 0">No late arrivals, absences or leave recorded for this day.</div>`)}
-  ${missing.length?`<tr><td style="padding:16px 28px 0">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:#FFF4F0;border-left:4px solid ${BR.orange}">
-      <tr><td style="padding:10px 14px;${F};font-size:12px;line-height:18px;color:${BR.ink}"><b style="color:#B03A1E">Not entered yet (${missing.length}):</b> ${missing.map(x=>esc(x.s.name)).join("; ")}</td></tr></table></td></tr>`:""}
-  <tr><td style="padding:16px 28px 0">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;background:${BR.tint}">
-      <tr><td style="padding:10px 14px;${F};font-size:11px;line-height:17px;color:${BR.gray}"><b style="color:${BR.ink}">Codes:</b> P present · LT1/LT2/LT3 late up to 1 / 2 / 3 h (overtime reduced by the same hours) · NO OT late over 3 h, no overtime · A absent · S sick leave · L leave · T training</td></tr></table>
-  </td></tr>
-  <tr><td style="padding:18px 28px 18px;${F};font-size:12px;color:${BR.gray}">Regards,<br><b style="color:${BR.ink}">${esc(preparedBy||"")}</b>${preparedBy?"<br>":""}${esc(S.cfg.unitName)} · ${esc(S.cfg.department)}</td></tr>
+  <tr><td style="padding:22px 28px 4px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+    <td valign="top">
+      <div style="${F};font-size:12px;color:${BR.gray}">${esc(S.cfg.department)} · ${esc(S.cfg.unitName)}</div>
+      <div style="${H};font-size:26px;line-height:32px;font-weight:bold;color:${BR.blue};padding-top:2px">${esc(title)}</div>
+      <div style="${F};font-size:14px;color:${BR.ink};padding-top:2px">${esc(period)}</div></td>
+    <td valign="top" align="right" style="${F};font-size:12px;color:${BR.gray};white-space:nowrap">Saudi Aramco</td></tr></table></td></tr>
+  ${introHtml?`<tr><td style="padding:12px 28px 0;${F};font-size:13px;line-height:19px;color:${BR.ink}">${introHtml}</td></tr>`:""}
+  ${body}
+  ${callout(`<span style="font-size:11px;color:${BR.gray}"><b style="color:${BR.ink}">Codes:</b> P present · LT1/LT2/LT3 late up to 1 / 2 / 3 h (overtime reduced by the same hours) · NO OT late over 3 h, no overtime · A absent · S sick leave · L leave · T training.${autoOn()?" * Past work days with no entry are counted as present (P).":""}</span>`,BR.tint,BR.tint)}
+  <tr><td style="padding:18px 28px 18px;${F};font-size:12px;color:${BR.gray}">Regards,<br><b style="color:${BR.ink}">${esc(sender||"")}</b>${sender?"<br>":""}${esc(S.cfg.unitName)} · ${esc(S.cfg.department)}</td></tr>
   <tr><td>${gradientBar(4)}</td></tr>
-  <tr><td style="padding:10px 28px 14px">
-    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
-      <td style="${F};font-size:10px;color:${BR.gray}">Saudi Aramco: Company General Use</td>
-      <td align="right" style="${F};font-size:10px;color:${BR.gray}">Generated from the SLU attendance tracker</td></tr></table>
-  </td></tr>
+  <tr><td style="padding:10px 28px 14px"><table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0"><tr>
+    <td style="${F};font-size:10px;color:${BR.gray}">Saudi Aramco: Company General Use</td>
+    <td align="right" style="${F};font-size:10px;color:${BR.gray}">Generated from the SLU attendance tracker</td></tr></table></td></tr>
 </table></td></tr></table></body></html>`;
 }
-function mailText(ds){
+
+/* ---- daily ---- */
+function dailyBody(ds){
+  const {t,crews,exc,missing}=dayData(ds);
+  const crewRows=crews.map((c,i)=>`<tr style="${zebra(i)}">${td(`<b>${esc(c.cr)}</b>`)}${td(c.work?esc(c.label):`<span style="color:${BR.mute}">${esc(c.label)}</span>`)}${td(c.staff,"center")}${td(c.work?c.P:"–","center")}${td(c.work?c.late:"–","center")}${td(dash(c.abs),"center")}${td(dash(c.away),"center")}${td(c.miss?`<b style="color:${BR.orange}">${c.miss}</b>`:"–","center")}${td(c.ot?`<b>${c.ot}</b>`:"–","center",`background:${BR.tint}`)}</tr>`).join("");
+  const excRows=exc.map((x,i)=>`<tr style="${zebra(i)}">${td(`<b>${esc(x.s.name)}</b><br><span style="color:${BR.gray};font-size:11px">${esc(x.s.badge)} · ${esc(x.s.title||"")}</span>`)}${td(esc(x.s.crew))}${td(chip(x.c))}${td(esc(x.why||(x.src?`From ${x.src}`:""))||"&nbsp;")}</tr>`).join("");
+  return tiles([[t.P,"Present",BR.green,t.auto?`incl. ${t.auto} assumed *`:"on time"],[t.late,"Late arrivals",BR.amber,"LT1–LT3 / no OT"],[t.A+t.S,"Absent / sick",BR.orange,"A + S codes"],[t.L+t.T,"Leave / training",BR.blue,"L + T codes"],
+      [t.rate==null?"–":t.rate+"%","Attendance rate",BR.dgreen,"of staff expected"],[t.ot+" h","Overtime earned",BR.teal,"after late deductions"],[t.off,"Off (rotation)",BR.mute,"rest days"],[t.missing,"Not entered yet",t.missing?BR.orange:BR.mute,"work days, no code"]])
+    + sect("Crew status",table(th("Crew")+th("Rotation today")+th("Staff","center")+th("Present","center")+th("Late","center")+th("Absent","center")+th("Leave / trng","center")+th("Missing","center")+th("OT h","center"),crewRows))
+    + sect("Exceptions",exc.length?table(th("Employee")+th("Crew")+th("Status")+th("Reason / note"),excRows):`<div style="${F};font-size:13px;color:${BR.dgreen};padding:4px 0">No late arrivals, absences or leave recorded for this day.</div>`)
+    + (missing.length?callout(`<b style="color:#B03A1E">Not entered yet (${missing.length}):</b> ${missing.map(x=>esc(x.s.name)).join("; ")}`,"#FFF4F0",BR.orange):"");
+}
+function dailyText(ds){
   const {t,crews,exc,missing}=dayData(ds), L=[];
-  L.push(`${S.cfg.unitName} · ${S.cfg.department}`,`Daily attendance report – ${fmtDate(ds)}`,"");
-  L.push(`Present ${t.P} · Late ${t.late} · Absent/sick ${t.A+t.S} · Leave/training ${t.L+t.T} · Off ${t.off} · Not entered ${t.missing}`);
-  L.push(`Attendance rate ${t.rate==null?"–":t.rate+"%"} · Overtime earned ${t.ot} h`,"","Crew status:");
+  L.push(`Present ${t.P} · Late ${t.late} · Absent/sick ${t.A+t.S} · Leave/training ${t.L+t.T} · Off ${t.off} · Not entered ${t.missing}`,`Attendance rate ${t.rate==null?"–":t.rate+"%"} · Overtime earned ${t.ot} h`,"","Crew status:");
   crews.forEach(c=>L.push(`  ${c.cr}: ${c.label}${c.work?` – present ${c.P}, late ${c.late}, OT ${c.ot} h`:""}`));
   if(exc.length){ L.push("","Exceptions:"); exc.forEach(x=>L.push(`  ${x.c.padEnd(5)} ${x.s.name} (${x.s.badge}, ${x.s.crew})${x.why?` – ${x.why}`:""}`)); }
-  if(missing.length){ L.push("",`Not entered yet (${missing.length}): ${missing.map(x=>x.s.name).join("; ")}`); }
-  L.push("","Saudi Aramco: Company General Use"); return L.join("\n");
+  if(missing.length) L.push("",`Not entered yet (${missing.length}): ${missing.map(x=>x.s.name).join("; ")}`);
+  return L.join("\n");
 }
-async function copyHtml(html, text){
-  try{ await navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([html],{type:"text/html"}),"text/plain":new Blob([text],{type:"text/plain"})})]); toast("Email copied. Paste it into a new Outlook message (Ctrl+V)."); return; }catch{}
-  try{ const fr=$("#mailFrame"), d=fr.contentDocument; const r=d.createRange(); r.selectNodeContents(d.body); const sel=fr.contentWindow.getSelection(); sel.removeAllRanges(); sel.addRange(r);
-    if(d.execCommand("copy")){ sel.removeAllRanges(); toast("Email copied. Paste it into a new Outlook message (Ctrl+V)."); return; } }catch{}
-  toast("Copy blocked here. Use Download instead.");
+/* ---- weekly ---- */
+function weeklyBody(start){
+  const w=weekData(start), t=w.t, today=riyadhToday();
+  const dayRowsHtml=w.days.map((d,i)=>{ const fut=d.ds>today; const v=x=>fut?"–":dash(x);
+    return `<tr style="${zebra(i)}">${td(`<b>${esc(shortDate(d.ds))}</b>`)}${td(fut?"–":d.duty,"center")}${td(v(d.P),"center")}${td(v(d.late),"center")}${td(v(d.A+d.S),"center")}${td(v(d.L+d.T),"center")}${td(d.missing&&!fut?`<b style="color:${BR.orange}">${d.missing}</b>`:"–","center")}${td(fut?"–":(d.rate==null?"–":d.rate+"%"),"center")}${td(fut?"–":(d.ot||"–"),"center",`background:${BR.tint}`)}</tr>`; }).join("");
+  let crew=""; const ppl=w.people.map((p,i)=>{ const hdr=p.s.crew!==crew?(crew=p.s.crew,`<tr><td colspan="8" style="${H};font-size:12px;font-weight:bold;color:${BR.dblue};background:${BR.tint};padding:5px 8px;border:1px solid ${BR.line}">${esc(crew)}</td></tr>`):"";
+    return hdr+`<tr style="${zebra(i)}">${td(`<b>${esc(p.s.name)}</b><br><span style="color:${BR.gray};font-size:11px">${esc(p.s.badge)}</span>`)}${td(p.work,"center")}${td(dash(p.P),"center")}${td(p.late?`<b style="color:#7A5300">${p.late}</b>`:"–","center")}${td(p.A+p.S?`<b style="color:#9A2A10">${p.A+p.S}</b>`:"–","center")}${td(dash(p.L+p.T),"center")}${td(p.rate==null?"–":p.rate+"%","center")}${td(p.ot?`<b>${p.ot}</b>`:"–","center",`background:${BR.tint}`)}</tr>`; }).join("");
+  const excRows=w.exc.map((x,i)=>`<tr style="${zebra(i)}">${td(esc(shortDate(x.ds)))}${td(`<b>${esc(x.s.name)}</b>`)}${td(esc(x.s.crew))}${td(chip(x.c))}${td(esc(x.why||(x.src?`From ${x.src}`:""))||"&nbsp;")}</tr>`).join("");
+  return tiles([[t.P,"Present days",BR.green,t.auto?`incl. ${t.auto} assumed *`:"on time"],[t.late,"Late days",BR.amber,`${t.noot} with no OT`],[t.A+t.S,"Absent / sick days",BR.orange,"A + S codes"],[t.L+t.T,"Leave / training days",BR.blue,"L + T codes"],
+      [t.rate==null?"–":t.rate+"%","Attendance rate",BR.dgreen,"present + late ÷ expected"],[t.ot+" h","Overtime earned",BR.teal,"after late deductions"],[t.duty,"On-duty days",BR.dblue,"scheduled, excl. leave"],[t.missing,"Not entered yet",t.missing?BR.orange:BR.mute,"work days, no code"]])
+    + sect("Day by day",table(th("Day")+th("On duty","center")+th("Present","center")+th("Late","center")+th("Absent","center")+th("Leave / trng","center")+th("Missing","center")+th("Rate","center")+th("OT h","center"),dayRowsHtml))
+    + sect("By employee",table(th("Employee")+th("Work days","center")+th("Present","center")+th("Late","center")+th("Absent","center")+th("Leave / trng","center")+th("Rate","center")+th("OT h","center"),ppl))
+    + sect("Exceptions this week",w.exc.length?table(th("Date")+th("Employee")+th("Crew")+th("Status")+th("Reason / note"),excRows):`<div style="${F};font-size:13px;color:${BR.dgreen};padding:4px 0">No late arrivals, absences or leave recorded this week.</div>`)
+    + (w.missing.length?callout(`<b style="color:#B03A1E">Not entered yet (${w.missing.length}):</b> ${w.missing.map(x=>`${esc(x.s.name)} (${esc(shortDate(x.ds))})`).join("; ")}`,"#FFF4F0",BR.orange):"");
 }
+function weeklyText(start){
+  const w=weekData(start), t=w.t, L=[];
+  L.push(`Present days ${t.P} · Late ${t.late} · Absent/sick ${t.A+t.S} · Leave/training ${t.L+t.T} · Rate ${t.rate==null?"–":t.rate+"%"} · OT ${t.ot} h`,"","By employee:");
+  w.people.forEach(p=>L.push(`  ${p.s.name} (${p.s.crew}): present ${p.P}, late ${p.late}, absent ${p.A+p.S}, leave/trng ${p.L+p.T}, OT ${p.ot} h`));
+  if(w.exc.length){ L.push("","Exceptions:"); w.exc.forEach(x=>L.push(`  ${shortDate(x.ds)}  ${x.c.padEnd(5)} ${x.s.name}${x.why?` – ${x.why}`:""}`)); }
+  return L.join("\n");
+}
+
+/* ---- sending ---- */
 function b64utf8(str){ const b=new TextEncoder().encode(str); let s=""; for(let i=0;i<b.length;i+=0x8000) s+=String.fromCharCode.apply(null,b.subarray(i,i+0x8000)); return btoa(s).replace(/.{76}/g,"$&\r\n"); }
 function encHeader(v){ return /^[\x20-\x7e]*$/.test(v)? v : `=?UTF-8?B?${b64utf8(v).replace(/\r\n/g,"")}?=`; }
-/* Outlook-ready draft: X-Unsent makes Outlook open it as a new message you can edit and send */
-function buildEml(ds, sender, subject){
+const addrList = v => (v||"").split(/[;,]\s*/).map(x=>x.trim()).filter(Boolean);
+function buildEml({to,cc,subject,html,text}){
   const bd="=_slu_"+Date.now().toString(36);
-  const to=(S.cfg.recipients||"").split(/[;,]\s*/).filter(Boolean).join("; ");
-  return ["X-Unsent: 1", `To: ${to}`, `Subject: ${encHeader(subject)}`, "MIME-Version: 1.0",
-    `Content-Type: multipart/alternative; boundary="${bd}"`, "",
-    `--${bd}`, "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64utf8(mailText(ds)), "",
-    `--${bd}`, "Content-Type: text/html; charset=UTF-8", "Content-Transfer-Encoding: base64", "", b64utf8(mailHtml(ds,sender)), "",
-    `--${bd}--`, ""].join("\r\n");
+  return ["X-Unsent: 1",`To: ${addrList(to).join("; ")}`,...(addrList(cc).length?[`Cc: ${addrList(cc).join("; ")}`]:[]),`Subject: ${encHeader(subject)}`,"MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${bd}"`,"",
+    `--${bd}`,"Content-Type: text/plain; charset=UTF-8","Content-Transfer-Encoding: base64","",b64utf8(text),"",
+    `--${bd}`,"Content-Type: text/html; charset=UTF-8","Content-Transfer-Encoding: base64","",b64utf8(html),"",`--${bd}--`,""].join("\r\n");
 }
+async function copyRich(html,text){
+  try{ await navigator.clipboard.write([new ClipboardItem({"text/html":new Blob([html],{type:"text/html"}),"text/plain":new Blob([text],{type:"text/plain"})})]); return true; }catch{}
+  try{ const fr=$("#mailFrame"), d=fr.contentDocument, r=d.createRange(); r.selectNodeContents(d.body); const sel=fr.contentWindow.getSelection(); sel.removeAllRanges(); sel.addRange(r);
+    const ok=d.execCommand("copy"); sel.removeAllRanges(); return ok; }catch{ return false; }
+}
+const saveFile=(data,type,name)=>{ const a=el("a",{href:URL.createObjectURL(new Blob([data],{type})),download:name}); document.body.append(a); a.click(); a.remove(); };
+const store={ get:(k,d="")=>{ try{ const v=localStorage.getItem(k); return v==null?d:v; }catch{ return d; } }, set:(k,v)=>{ try{ localStorage.setItem(k,v); }catch{} } };
+
 function viewMail(){
-  const today=riyadhToday(); let ds = S.month===today.slice(0,7)? today : `${S.month}-01`;
-  let sender=""; try{ sender=localStorage.getItem("sluSender")||""; }catch{}
-  const who=()=>sender||(S.me&&S.me.name)||"";
-  const subj=()=>`${S.cfg.unitName} – daily attendance report – ${fmtDate(ds)}`;
-  const fr=el("iframe",{id:"mailFrame",title:"Email preview",style:"width:100%;height:760px;border:1px solid var(--line);border-radius:8px;background:#F2F4F6"});
-  const link=el("a",{class:"btn",href:"#",text:"Open in Outlook (plain text)"});
-  const draw=()=>{ fr.srcdoc=mailHtml(ds,who()); link.href=`mailto:${encodeURIComponent(S.cfg.recipients||"")}?subject=${encodeURIComponent(subj())}&body=${encodeURIComponent(mailText(ds))}`; };
-  const save=(data,type,name)=>{ const a=el("a",{href:URL.createObjectURL(new Blob([data],{type})),download:name}); document.body.append(a); a.click(); a.remove(); };
-  const dl=()=>save(mailHtml(ds,who()),"text/html",`SLU_attendance_${ds}.htm`);
-  const eml=()=>{ save(buildEml(ds,who(),subj()),"message/rfc822",`SLU_daily_attendance_${ds}.eml`); toast("Draft downloaded. Open it: Outlook shows it as a new message ready to send."); };
-  const inp=el("input",{type:"date",id:"mailDate",value:ds,min:`${S.month}-01`,max:`${S.month}-${pad(daysIn(S.month))}`,onchange:e=>{ if(e.target.value){ ds=e.target.value; draw(); } }});
-  setTimeout(draw);
-  return [...statusNotes(), el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Daily attendance email"}),
-    el("div",{class:"row"},el("label",{class:"f",for:"mailDate"},"Date",inp),el("label",{class:"f",for:"mailWho"},"Sign as",el("input",{id:"mailWho",size:"20",value:who(),onchange:e=>{ sender=e.target.value.trim(); try{ localStorage.setItem("sluSender",sender); }catch{} draw(); }})),
-      el("button",{class:"btn primary",type:"button",onclick:eml,text:"Outlook draft (.eml)"}),
-      el("button",{class:"btn",type:"button",onclick:()=>copyHtml(mailHtml(ds,who()),mailText(ds)),text:"Copy email"}),
-      el("button",{class:"btn",type:"button",onclick:()=>copy(subj()),text:"Copy subject"}),
-      el("button",{class:"btn",type:"button",onclick:dl,text:"Download .htm"}),link)),
-    el("div",{class:"card-b"},
-      el("p",{class:"small muted",text:`Outlook draft downloads a ready email with recipients, subject and the figures filled in: open it, check it and press Send. Or use Copy email and paste into a new message. Recipients from Settings: ${S.cfg.recipients||"none yet"}.`}),fr))];
+  const today=riyadhToday();
+  const st={ kind: store.get("sluKind","daily"), ds: S.month===today.slice(0,7)?today:`${S.month}-01`,
+    to: store.get("sluTo",S.cfg.recipients||""), cc: store.get("sluCc",S.cfg.cc||""), sender: store.get("sluSender",(S.me&&S.me.name)||""), subject:"", intro:"", introEdited:false, subjEdited:false };
+  const start=()=>weekStart(st.ds);
+  const period=()=> st.kind==="daily"? fmtDate(st.ds) : `${fmtDate(start())} – ${fmtDate(addDays(start(),6))}`;
+  const title=()=> st.kind==="daily"?"Daily attendance report":"Weekly attendance report";
+  const defSubject=()=> `${S.cfg.unitName} – ${st.kind} attendance report – ${st.kind==="daily"?fmtDate(st.ds):`week of ${fmtDate(start())}`}`;
+  const defIntro=()=> st.kind==="daily"
+    ? `Dear all,\n\nPlease find below the daily attendance report for ${fmtDate(st.ds)}.`
+    : `Dear all,\n\nPlease find below the weekly attendance report for ${period()}.`;
+  const html=()=>shell({title:title(),period:period(),intro:st.intro,sender:st.sender,body: st.kind==="daily"?dailyBody(st.ds):weeklyBody(start())});
+  const text=()=>`${title()} – ${period()}\n${S.cfg.department} · ${S.cfg.unitName}\n\n${st.intro}\n\n${st.kind==="daily"?dailyText(st.ds):weeklyText(start())}\n\nRegards,\n${st.sender}\n\nSaudi Aramco: Company General Use`;
+
+  const fr=el("iframe",{id:"mailFrame",title:"Email preview (you can click and edit the text)",style:"width:100%;height:820px;border:1px solid var(--line);border-radius:8px;background:#F2F4F6"});
+  let edited=false;
+  const currentHtml=()=>{ try{ const d=fr.contentDocument; if(edited&&d&&d.documentElement) return "<!DOCTYPE html>"+d.documentElement.outerHTML.replace(/\scontenteditable="true"/g,""); }catch{} return html(); };
+  const draw=()=>{ if(!st.introEdited){ st.intro=defIntro(); introBox.value=st.intro; } if(!st.subjEdited){ st.subject=defSubject(); subjBox.value=st.subject; }
+    edited=false; fr.srcdoc=html(); dateLbl.firstChild.textContent = st.kind==="daily"?"Date":"Any day in the week"; };
+  fr.addEventListener("load",()=>{ try{ const d=fr.contentDocument; d.body.contentEditable="true"; d.body.style.outline="none"; d.addEventListener("input",()=>{ edited=true; }); }catch{} });
+  const rebuild=async()=>{ const ms=[...new Set((st.kind==="daily"?[st.ds]:Array.from({length:7},(_,i)=>addDays(start(),i))).map(d=>d.slice(0,7)))];
+    draw(); if(await ensureMonths(ms).catch(()=>false)) draw(); };
+
+  const kindSel=el("select",{id:"rKind",onchange:e=>{ st.kind=e.target.value; store.set("sluKind",st.kind); st.introEdited=false; st.subjEdited=false; rebuild(); }},
+    el("option",{value:"daily",selected:st.kind==="daily"?true:null},"Daily report"),el("option",{value:"weekly",selected:st.kind==="weekly"?true:null},"Weekly report"));
+  const dateInp=el("input",{type:"date",id:"mailDate",value:st.ds,onchange:e=>{ if(e.target.value){ st.ds=e.target.value; st.introEdited=false; st.subjEdited=false; rebuild(); } }});
+  const dateLbl=el("label",{class:"f",for:"mailDate"},"Date",dateInp);
+  const field=(id,label,val,key,ph)=>el("label",{class:"f",for:id,style:"flex:1 1 240px"},label,el("input",{id,value:val,placeholder:ph||"",style:"width:100%",onchange:e=>{ st[key]=e.target.value.trim(); if(key==="to") store.set("sluTo",st[key]); if(key==="cc") store.set("sluCc",st[key]); if(key==="sender"){ store.set("sluSender",st[key]); draw(); } }}));
+  const subjBox=el("input",{id:"mSubj",style:"width:100%",oninput:e=>{ st.subject=e.target.value; st.subjEdited=true; }});
+  const introBox=el("textarea",{id:"mIntro",rows:"3",style:"width:100%",oninput:e=>{ st.intro=e.target.value; st.introEdited=true; },onchange:()=>{ edited=false; fr.srcdoc=html(); }});
+
+  const sendOutlook=async()=>{
+    const ok=await copyRich(currentHtml(),text());
+    const q=[addrList(st.cc).length?`cc=${encodeURIComponent(addrList(st.cc).join(";"))}`:"",`subject=${encodeURIComponent(st.subject)}`].filter(Boolean).join("&");
+    location.href=`mailto:${addrList(st.to).map(encodeURIComponent).join(";")}?${q}`;
+    toast(ok?"Outlook is opening with To, CC and Subject filled. Click in the message body, press Ctrl+V, then Send.":"Outlook is opening. Copy was blocked here: use Copy email, then paste.");
+  };
+  const copyEmail=async()=>toast(await copyRich(currentHtml(),text())?"Email copied. Paste it into Outlook with Ctrl+V.":"Copy blocked here. Use Outlook draft instead.");
+  const eml=()=>{ saveFile(buildEml({to:st.to,cc:st.cc,subject:st.subject,html:currentHtml(),text:text()}),"message/rfc822",`SLU_${st.kind}_attendance_${st.kind==="daily"?st.ds:start()}.eml`); toast("Draft downloaded. Open it to send from Outlook."); };
+  const print=()=>{ const w=window.open("","_blank"); if(!w){ toast("Allow pop-ups to print"); return; } w.document.write(currentHtml()); w.document.close(); w.focus(); setTimeout(()=>w.print(),400); };
+  const reset=()=>{ st.introEdited=false; st.subjEdited=false; draw(); toast("Email rebuilt from the latest data"); };
+
+  setTimeout(rebuild);
+  return [...statusNotes(), el("section",{class:"card"},
+    el("div",{class:"card-h"},el("h2",{text:"Attendance report email"}),
+      el("div",{class:"row"},el("label",{class:"f",for:"rKind"},"Report",kindSel),dateLbl)),
+    el("div",{class:"card-b",style:"display:grid;gap:10px"},
+      el("div",{class:"row",style:"align-items:flex-end"},field("mTo","To",st.to,"to","name@aramco.com; name2@aramco.com"),field("mCc","CC",st.cc,"cc","optional"),field("mWho","Sign as",st.sender,"sender")),
+      el("label",{class:"f",for:"mSubj"},"Subject",subjBox),
+      el("label",{class:"f",for:"mIntro"},"Opening message",introBox),
+      el("div",{class:"row"},
+        el("button",{class:"btn primary",type:"button",onclick:sendOutlook,text:"Send with Outlook"}),
+        el("button",{class:"btn",type:"button",onclick:copyEmail,text:"Copy email"}),
+        el("button",{class:"btn",type:"button",onclick:eml,text:"Outlook draft (.eml)"}),
+        el("button",{class:"btn",type:"button",onclick:print,text:"Print / PDF"}),
+        el("button",{class:"btn",type:"button",onclick:reset,text:"Rebuild from data"})),
+      el("p",{class:"small muted",text:"Send with Outlook opens a new Outlook message with To, CC and Subject filled in and puts the formatted report on your clipboard: click in the message body, press Ctrl+V and Send. You can also click anywhere in the preview below and edit the text before sending."}),
+      fr))];
 }
+
 
 async function viewAudit(){
   const rows=[]; for(const d of S.audit){ for(const [id,e] of Object.entries(d.entries||{})) rows.push({id,...e}); }
@@ -615,7 +704,7 @@ function viewConfig(){
   const otRow=(key,label,len)=>el("tr",{},el("td",{text:label}),...Array.from({length:7},(_,i)=>el("td",{},i<len?el("input",{type:"number",min:"0",max:"24",step:"0.5","aria-label":`${label} day ${i+1}`,value:c.ot[key][i],disabled:can?null:true,oninput:e=>{ c.ot[key][i]=Number(e.target.value)||0; }}):"–")));
   const save=async()=>{
     for(const cr of CREWS){ if(!/^\d{4}-\d{2}-\d{2}$/.test(c.anchors[cr]||"")){ toast(`Enter a start date for ${cr}`); return; } if(cr.startsWith("R-35")&&wd(c.anchors[cr])!==0){ toast(`${cr}: pick the Sunday that starts a long week`); return; } }
-    c.unitName=$("#cfUnit").value.trim()||DEFAULT_CFG.unitName; c.department=$("#cfDept").value.trim()||DEFAULT_CFG.department; c.recipients=$("#cfMail").value.trim();
+    c.unitName=$("#cfUnit").value.trim()||DEFAULT_CFG.unitName; c.department=$("#cfDept").value.trim()||DEFAULT_CFG.department; c.recipients=$("#cfMail").value.trim(); c.cc=$("#cfCc").value.trim(); c.autoPresent=$("#cfAuto").checked;
     for(const k of ["LT1","LT2","LT3"]) c.lateDed[k]=Math.max(0,Math.min(24,Number($("#ld"+k).value)||0));
     const list=id=>[...new Set($(id).value.split(/[\s,;]+/).map(x=>x.trim().toLowerCase()).filter(x=>x.includes("@")))];
     try{ await S.db.doc("config/main").set(c); await S.db.doc("config/access").set({...S.access,editors:list("#acEd"),viewers:list("#acVw")},{merge:true}); await logAudit({what:"Settings",emp:"",old:"",new:"updated",why:""}); toast("Settings saved"); }
@@ -634,7 +723,9 @@ function viewConfig(){
         el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"General"})),el("div",{class:"card-b",style:"display:grid;gap:10px"},
           el("label",{class:"f",for:"cfUnit"},"Unit name",inp("cfUnit",c.unitName)),
           el("label",{class:"f",for:"cfDept"},"Department",inp("cfDept",c.department)),
-          el("label",{class:"f",for:"cfMail"},"Daily email recipients (separate with ;)",inp("cfMail",c.recipients||"",{placeholder:"name1@aramco.com; name2@aramco.com"})))),
+          el("label",{class:"f",for:"cfMail"},"Report email: To (separate with ;)",inp("cfMail",c.recipients||"",{placeholder:"name1@aramco.com; name2@aramco.com"})),
+          el("label",{class:"f",for:"cfCc"},"Report email: CC",inp("cfCc",c.cc||"",{placeholder:"optional"})),
+          el("label",{class:"row small",for:"cfAuto",style:"gap:8px"},el("input",{type:"checkbox",id:"cfAuto",checked:c.autoPresent!==false?true:null,disabled:can?null:true}),"Count past work days with no entry as present (P). Entered codes, including L and T, always win."))),
         el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"People with access"})),el("div",{class:"card-b",style:"display:grid;gap:10px"},
           el("p",{class:"small muted",text:"One email per line. Editors can enter attendance; viewers can only look. Create each person's login in Firebase first (see README)."}),
           el("label",{class:"f",for:"acEd"},"Editors (group leaders)",el("textarea",{id:"acEd",rows:"4",disabled:can?null:true},(S.access.editors||[]).join("\n"))),
