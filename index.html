@@ -949,7 +949,7 @@ async function logAudit(e){
 /* ---------------- routing & render ---------------- */
 const ROUTES={timesheet:viewTimesheet,overtime:viewOvertime,"daily-email":viewMail,audit:viewAudit,staff:viewStaff,config:viewConfig};
 let renderSeq=0;
-async function render(){
+async function render(){ if(S.admin) return;
   const seq=++renderSeq; const key=(location.hash||"#timesheet").slice(1); const fn=ROUTES[key]||viewTimesheet;
   document.querySelectorAll("nav.tabs a").forEach(a=>a.setAttribute("aria-current",a.getAttribute("href")==="#"+(ROUTES[key]?key:"timesheet")?"page":"false"));
   $("#unitTitle").textContent=`${S.cfg.unitName.replace(/\s*\(SLU\)/,"")} attendance`; $("#unitSub").textContent=`${S.cfg.department} · crew rotations R-35 and R-31`;
@@ -1016,6 +1016,7 @@ function lockApp(){ store.set("sluKey",""); unsubs.forEach(f=>f()); unsubs=[]; i
 
 /* owner-only page (#admin): set or change the site password and move the data with it */
 function adminMode(db){
+  S.admin=true;
   const auth=firebase.auth(), view=$("#view");
   const msg=el("p",{class:"small",style:"color:#c2361b"});
   const login=el("form",{class:"card-b",style:"display:grid;gap:10px;max-width:420px"},
