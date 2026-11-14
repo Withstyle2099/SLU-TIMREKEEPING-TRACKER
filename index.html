@@ -189,13 +189,12 @@ pre.mail{white-space:pre-wrap;background:var(--bg);border:1px solid var(--line);
 
 <div id="gate" hidden>
   <section class="card">
-    <div class="card-h"><h2>Sign in</h2></div>
+    <div class="card-h"><h2>SLU attendance</h2></div>
     <form class="card-b" id="gateForm">
-      <p class="small muted" id="gateMsg">Sign in with the account the owner gave you.</p>
-      <label class="f" for="gEmail">Email<input id="gEmail" type="email" autocomplete="username" required></label>
-      <label class="f" for="gPass">Password<input id="gPass" type="password" autocomplete="current-password" required></label>
-      <button class="btn primary" type="submit">Sign in</button>
-      <button class="btn" type="button" id="gReset">Forgot password</button>
+      <p class="small muted">Enter the site password and your name. Your name is recorded in the audit log with every change you make.</p>
+      <label class="f" for="gName">Your name<input id="gName" autocomplete="name" required></label>
+      <label class="f" for="gPass">Site password<input id="gPass" type="password" autocomplete="current-password" required></label>
+      <button class="btn primary" type="submit">Open</button>
       <div class="small" id="gateErr" style="color:#c2361b"></div>
     </form>
   </section>
@@ -306,6 +305,7 @@ async function ensureMonths(ms){
 const nameCache={};
 async function names(ids){
   const u=[...new Set(ids.filter(Boolean))]; if(!S.db||!u.length) return {};
+  u.filter(id=>id.startsWith("n:")).forEach(id=>{ nameCache[id]={name:id.slice(2)}; });
   await Promise.all(u.filter(id=>!(id in nameCache)).map(async id=>{ try{ const d=await S.db.doc("users/"+id).get(); nameCache[id]=d.exists?d.data():null; }catch{ nameCache[id]=null; } }));
   const o={}; u.forEach(id=>{ if(nameCache[id]) o[id]=nameCache[id]; }); return o;
 }
@@ -883,8 +883,7 @@ function viewConfig(){
     for(const cr of CREWS){ if(!/^\d{4}-\d{2}-\d{2}$/.test(c.anchors[cr]||"")){ toast(`Enter a start date for ${cr}`); return; } if(cr.startsWith("R-35")&&wd(c.anchors[cr])!==0){ toast(`${cr}: pick the Sunday that starts a long week`); return; } }
     c.unitName=$("#cfUnit").value.trim()||DEFAULT_CFG.unitName; c.department=$("#cfDept").value.trim()||DEFAULT_CFG.department; c.recipients=$("#cfMail").value.trim(); c.cc=$("#cfCc").value.trim(); c.autoPresent=$("#cfAuto").checked;
     for(const k of ["LT1","LT2","LT3"]) c.lateDed[k]=Math.max(0,Math.min(24,Number($("#ld"+k).value)||0));
-    const list=id=>[...new Set($(id).value.split(/[\s,;]+/).map(x=>x.trim().toLowerCase()).filter(x=>x.includes("@")))];
-    try{ await S.db.doc("config/main").set(c); await S.db.doc("config/access").set({...S.access,editors:list("#acEd"),viewers:list("#acVw")},{merge:true}); await logAudit({what:"Settings",emp:"",old:"",new:"updated",why:""}); toast("Settings saved"); }
+    try{ await S.db.doc("config/main").set(c); await logAudit({what:"Settings",emp:"",old:"",new:"updated",why:""}); toast("Settings saved"); }
     catch(e){ toast("Not saved: "+(e&&e.message||"try again")); }
   };
   return [...statusNotes(), !can?el("div",{class:"notice",text:"Only the owner can change settings. You can view them here."}):null,
@@ -903,10 +902,9 @@ function viewConfig(){
           el("label",{class:"f",for:"cfMail"},"Report email: To (separate with ;)",inp("cfMail",c.recipients||"",{placeholder:"name1@aramco.com; name2@aramco.com"})),
           el("label",{class:"f",for:"cfCc"},"Report email: CC",inp("cfCc",c.cc||"",{placeholder:"optional"})),
           el("label",{class:"row small",for:"cfAuto",style:"gap:8px"},el("input",{type:"checkbox",id:"cfAuto",checked:c.autoPresent!==false?true:null,disabled:can?null:true}),"Count past work days with no entry as present (P). Entered codes, including L and T, always win."))),
-        el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"People with access"})),el("div",{class:"card-b",style:"display:grid;gap:10px"},
-          el("p",{class:"small muted",text:"One email per line. Editors can enter attendance; viewers can only look. Create each person's login in Firebase first (see README)."}),
-          el("label",{class:"f",for:"acEd"},"Editors (group leaders)",el("textarea",{id:"acEd",rows:"4",disabled:can?null:true},(S.access.editors||[]).join("\n"))),
-          el("label",{class:"f",for:"acVw"},"Viewers",el("textarea",{id:"acVw",rows:"3",disabled:can?null:true},(S.access.viewers||[]).join("\n"))))),
+        el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Access"})),el("div",{class:"card-b small",style:"display:grid;gap:6px"},
+          el("p",{text:"Everyone opens the site with one shared password and types their name, which is saved with every change in the audit log."}),
+          el("p",{},"To change the password, the owner opens ",el("a",{href:"#admin",onclick:()=>setTimeout(()=>location.reload()),text:"the owner page"})," and signs in with the owner account."))),
         can?el("div",{class:"row"},el("button",{class:"btn primary",type:"button",onclick:save,text:"Save settings"})):null))];
 }
 
@@ -973,43 +971,90 @@ function subRows(){
   unsubRows=S.db.collection(`months/${S.month}/rows`).onSnapshot(q=>{ const o={}; q.docs.forEach(d=>o[d.id]=d.data()); S.rows=o; S.loaded.rows=true; soon(); },onErr);
 }
 
+/* ---------- access: one shared site password (no user accounts) ---------- */
+const SALT="slu-attendance-v1";
+async function siteKey(pw){
+  const base=await crypto.subtle.importKey("raw",new TextEncoder().encode(pw),"PBKDF2",false,["deriveBits"]);
+  const bits=await crypto.subtle.deriveBits({name:"PBKDF2",hash:"SHA-256",salt:new TextEncoder().encode(SALT),iterations:150000},base,256);
+  return [...new Uint8Array(bits)].map(b=>b.toString(16).padStart(2,"0")).join("");
+}
+/* all app data lives under vault/<key>/…; this wrapper keeps the rest of the code unchanged */
+function vaultDb(db,key){ const P=p=>`vault/${key}/${p}`; return {doc:p=>db.doc(P(p)), collection:p=>db.collection(P(p)), batch:()=>db.batch()}; }
+let unsubs=[];
+function startApp(db,key,name){
+  unsubs.forEach(f=>f()); unsubs=[]; if(unsubRows){ unsubRows(); unsubRows=null; }
+  S.db=vaultDb(db,key); S.me={id:"n:"+name,name}; S.ready=true; S.err=""; S.noAccess=false; S.readOnly=false; S.canWrite=true; S.isOwner=true;
+  $("#gate").hidden=true;
+  $("#me").replaceChildren(el("span",{},el("b",{text:name})),el("button",{class:"btn",type:"button",onclick:lockApp,text:"Lock"}));
+  setTimeout(()=>{ S.slow=true; soon(); },10000);
+  unsubs.push(S.db.doc("config/main").onSnapshot(d=>{ const v=d.exists?d.data():{}; S.cfg={...structuredClone(DEFAULT_CFG),...v,anchors:{...DEFAULT_CFG.anchors,...(v.anchors||{})},lateDed:{...DEFAULT_CFG.lateDed,...(v.lateDed||{})},ot:{...DEFAULT_CFG.ot,...(v.ot||{})}}; S.loaded.cfg=true; soon(); },onErr));
+  unsubs.push(S.db.collection("staff").onSnapshot(q=>{ S.staff=q.docs.map(d=>({id:d.id,...d.data()})); S.loaded.staff=true; soon(); },onErr));
+  unsubs.push(S.db.collection("audit").orderBy("day","desc").limit(62).onSnapshot(q=>{ S.audit=q.docs.map(d=>d.data()); S.loaded.audit=true; if((location.hash||"")==="#audit") soon(); },onErr));
+  subRows(); soon();
+}
+function lockApp(){ store.set("sluKey",""); unsubs.forEach(f=>f()); unsubs=[]; if(unsubRows){ unsubRows(); unsubRows=null; } S.db=null; S.ready=false; $("#me").replaceChildren(); $("#gPass").value=""; $("#gate").hidden=false; }
+
 (function boot(){
   const today=riyadhToday(); S.month=today>="2026-11"?today.slice(0,7):"2026-11"; $("#mPick").value=S.month;
   render();
   const cfg=window.FIREBASE_CONFIG;
   if(!window.firebase||!cfg||!cfg.apiKey||cfg.apiKey.startsWith("PASTE")){ S.ready=true; soon(); return; }
   firebase.initializeApp(cfg);
-  const auth=firebase.auth(), db=firebase.firestore();
-  const gate=$("#gate"), gErr=$("#gateErr");
-  const fail=e=>{ gErr.textContent=({"auth/invalid-credential":"Wrong email or password.","auth/wrong-password":"Wrong email or password.","auth/user-not-found":"No account with that email. Ask the owner to create one.","auth/too-many-requests":"Too many tries. Wait a few minutes.","auth/popup-closed-by-user":""})[e.code]??(e.message||"Sign-in failed"); };
-  $("#gateForm").addEventListener("submit",e=>{ e.preventDefault(); gErr.textContent=""; auth.signInWithEmailAndPassword($("#gEmail").value.trim(),$("#gPass").value).catch(fail); });
-  $("#gReset").addEventListener("click",()=>{ const em=$("#gEmail").value.trim(); if(!em){ gErr.textContent="Type your email first."; return; } auth.sendPasswordResetEmail(em).then(()=>{ gErr.textContent="Reset link sent. Check your email."; }).catch(fail); });
-  let unsubs=[];
-  auth.onAuthStateChanged(async u=>{
-    unsubs.forEach(f=>f()); unsubs=[]; if(unsubRows){ unsubRows(); unsubRows=null; }
-    if(!u){ S.db=null; S.ready=false; gate.hidden=false; $("#me").replaceChildren(); return; }
-    gate.hidden=true;
-    const email=(u.email||"").toLowerCase(), name=u.displayName||email.split("@")[0];
-    S.me={id:u.uid,name,email}; S.db=db; S.ready=true; S.err=""; S.noAccess=false; S.readOnly=false;
-    try{ await db.doc("users/"+u.uid).set({name,email},{merge:true}); }catch{}
-    // who is the owner? (only the real owner can create this doc; the Firestore rules enforce it)
-    let acc=null;
-    try{ const a=await db.doc("config/access").get(); acc=a.exists?a.data():null; }catch{}
-    if(!acc){ try{ await db.doc("config/access").set({owner:email,editors:[],viewers:[]}); acc={owner:email,editors:[],viewers:[]}; }catch{ acc={editors:[],viewers:[]}; } }
-    S.access={editors:[],viewers:[],...acc};
-    S.isOwner=!!acc.owner&&acc.owner===email;
-    const isEd=S.isOwner||(S.access.editors||[]).includes(email), isVw=isEd||(S.access.viewers||[]).includes(email);
-    S.canWrite=isEd; S.readOnly=!isEd; S.noAccess=!isVw;
-    $("#me").replaceChildren(el("span",{},el("b",{text:name}),` · ${S.isOwner?"Owner":isEd?"Editor":isVw?"Viewer":"No access"}`),el("button",{class:"btn",type:"button",onclick:()=>auth.signOut(),text:"Sign out"}));
-    if(!isVw){ soon(); return; }
-    setTimeout(()=>{ S.slow=true; soon(); },10000);
-    unsubs.push(db.doc("config/access").onSnapshot(d=>{ if(d.exists){ S.access={editors:[],viewers:[],...d.data()}; } },()=>{}));
-    unsubs.push(db.doc("config/main").onSnapshot(d=>{ const v=d.exists?d.data():{}; S.cfg={...structuredClone(DEFAULT_CFG),...v,anchors:{...DEFAULT_CFG.anchors,...(v.anchors||{})},lateDed:{...DEFAULT_CFG.lateDed,...(v.lateDed||{})},ot:{...DEFAULT_CFG.ot,...(v.ot||{})}}; S.loaded.cfg=true; soon(); },onErr));
-    unsubs.push(db.collection("staff").onSnapshot(q=>{ S.staff=q.docs.map(d=>({id:d.id,...d.data()})); S.loaded.staff=true; soon(); },onErr));
-    unsubs.push(db.collection("audit").orderBy("day","desc").limit(62).onSnapshot(q=>{ S.audit=q.docs.map(d=>d.data()); S.loaded.audit=true; if((location.hash||"")==="#audit") soon(); },onErr));
-    subRows();
-  });
+  const db=firebase.firestore();
+  if(location.hash==="#admin"){ adminMode(db); return; }
+  const gErr=$("#gateErr"); $("#gName").value=store.get("sluName","");
+  const tryKey=async(key,name,silent)=>{
+    try{ await db.doc(`vault/${key}/config/main`).get(); store.set("sluKey",key); store.set("sluName",name); startApp(db,key,name); return true; }
+    catch(e){ if(!silent) gErr.textContent = e&&e.code==="permission-denied" ? "Wrong password." : "Can't reach the database ("+(e&&e.code||"network")+")."; return false; }
+  };
+  $("#gateForm").addEventListener("submit",async e=>{ e.preventDefault(); gErr.textContent="Checking…";
+    const name=$("#gName").value.trim(), pw=$("#gPass").value; if(!name){ gErr.textContent="Type your name (it goes in the audit log)."; return; }
+    const key=await siteKey(pw); if(await tryKey(key,name,false)) gErr.textContent=""; });
+  const saved=store.get("sluKey",""), nm=store.get("sluName","");
+  if(saved&&nm) tryKey(saved,nm,true).then(ok=>{ if(!ok) $("#gate").hidden=false; }); else $("#gate").hidden=false;
 })();
+
+/* owner-only page (#admin): set or change the site password and move the data with it */
+function adminMode(db){
+  const auth=firebase.auth(), view=$("#view");
+  const msg=el("p",{class:"small",style:"color:#c2361b"});
+  const login=el("form",{class:"card-b",style:"display:grid;gap:10px;max-width:420px"},
+    el("p",{class:"small muted",text:"Owner page. Sign in with the owner account to set or change the site password."}),
+    el("label",{class:"f"},"Owner email",el("input",{id:"aEmail",type:"email",required:true,autocomplete:"username"})),
+    el("label",{class:"f"},"Owner password",el("input",{id:"aPass",type:"password",required:true,autocomplete:"current-password"})),
+    el("button",{class:"btn primary",type:"submit",text:"Sign in"}),msg);
+  login.addEventListener("submit",e=>{ e.preventDefault(); msg.textContent=""; auth.signInWithEmailAndPassword($("#aEmail").value.trim(),$("#aPass").value).catch(err=>msg.textContent=err.message); });
+  const card=el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Site password (owner)"})),login);
+  view.replaceChildren(card);
+  auth.onAuthStateChanged(u=>{
+    if(!u) return;
+    const out=el("div",{class:"small",style:"white-space:pre-wrap"});
+    const form=el("form",{class:"card-b",style:"display:grid;gap:10px;max-width:420px"},
+      el("p",{class:"small",text:`Signed in as ${u.email}. Everyone opens the site with this one password and types their name.`}),
+      el("label",{class:"f"},"New site password (8+ characters)",el("input",{id:"nPw",type:"password",minlength:"8",required:true,autocomplete:"new-password"})),
+      el("label",{class:"f"},"Type it again",el("input",{id:"nPw2",type:"password",minlength:"8",required:true,autocomplete:"new-password"})),
+      el("button",{class:"btn primary",type:"submit",text:"Save password and move data"}),out,
+      el("button",{class:"btn",type:"button",onclick:()=>auth.signOut().then(()=>location.reload()),text:"Sign out"}));
+    form.addEventListener("submit",async e=>{ e.preventDefault();
+      const a=$("#nPw").value, b=$("#nPw2").value; if(a!==b){ out.textContent="The two passwords don't match."; return; } if(a.length<8){ out.textContent="Use at least 8 characters."; return; }
+      out.textContent="Working…";
+      try{
+        const key=await siteKey(a); const cur=await db.doc("config/vault").get(); const old=cur.exists?cur.data().key:null;
+        const src=old?`vault/${old}/`:"", dst=`vault/${key}/`; let n=0;
+        const copyDoc=async p=>{ const d=await db.doc(src+p).get(); if(d.exists){ await db.doc(dst+p).set(d.data()); n++; } };
+        const copyCol=async p=>{ const q=await db.collection(src+p).get(); for(const d of q.docs){ await db.doc(dst+p+"/"+d.id).set(d.data()); n++; } };
+        if(old!==key){
+          await copyDoc("config/main"); await copyCol("staff"); await copyCol("audit"); await copyCol("users");
+          for(let y=2026;y<=2028;y++) for(let m=1;m<=12;m++){ const mm=`${y}-${String(m).padStart(2,"0")}`; if(mm<"2026-10") continue; await copyCol(`months/${mm}/rows`); }
+        }
+        await db.doc("config/vault").set({key,updated:new Date().toISOString(),by:u.email});
+        out.textContent=`Done. ${n} records moved. Share the new password with the group leaders; the old one stops working now.`;
+      }catch(err){ out.textContent="Failed: "+(err&&err.message||err); }
+    });
+    card.replaceChildren(el("div",{class:"card-h"},el("h2",{text:"Site password (owner)"})),form);
+  });
+}
+
 
 </script>
 </body>
