@@ -320,12 +320,14 @@ function monthStats(){
   const m=S.month, n=daysIn(m), today=riyadhToday();
   const per={}; const daily=Array.from({length:n},()=>({duty:0,present:0,late:0,absent:0,missing:0}));
   for(const s of activeStaff()){
-    const t={P:0,auto:0,late:0,noot:0,A:0,S:0,L:0,T:0,ot:0,duty:0,missing:0};
+    const t={P:0,auto:0,late:0,noot:0,A:0,S:0,L:0,T:0,ot:0,otEarned:0,otPlan:0,duty:0,missing:0};
     for(let d=1; d<=n; d++){
       const ds=`${m}-${pad(d)}`, e=eff(s,ds,today), c=e.c, work=isWork(s.crew,ds,S.cfg); if(e.auto) t.auto++;
       if(c==="P") t.P++; if(["LT1","LT2","LT3","NO OT"].includes(c)) t.late++; if(c==="NO OT") t.noot++;
       if(c==="A") t.A++; if(c==="S") t.S++; if(c==="L") t.L++; if(c==="T") t.T++;
-      t.ot += otFor(s.crew,ds,c,S.cfg);
+      if(c) t.otEarned += otFor(s.crew,ds,c,S.cfg);
+      else if(work && ds>=today) t.otPlan += otFor(s.crew,ds,"P",S.cfg);   // today/future work day not entered yet: planned as per rotation
+      t.ot = t.otEarned + t.otPlan;
       if(work && !["L","T"].includes(c)){ t.duty++; daily[d-1].duty++; }
       if(work && !c && ds<=today){ t.missing++; daily[d-1].missing++; }
       if(c==="P") daily[d-1].present++; if(["LT1","LT2","LT3","NO OT"].includes(c)) daily[d-1].late++; if(c==="A"||c==="S") daily[d-1].absent++;
@@ -335,7 +337,7 @@ function monthStats(){
   }
   const sum=k=>Object.values(per).reduce((a,t)=>a+t[k],0);
   const base=sum("P")+sum("late")+sum("A")+sum("S");
-  return {per,daily,tot:{P:sum("P"),late:sum("late"),noot:sum("noot"),A:sum("A"),S:sum("S"),ot:sum("ot"),missing:sum("missing"),duty:sum("duty"),rate: base?Math.round(100*(sum("P")+sum("late"))/base):null}};
+  return {per,daily,tot:{otEarned:sum("otEarned"),otPlan:sum("otPlan"),P:sum("P"),late:sum("late"),noot:sum("noot"),A:sum("A"),S:sum("S"),ot:sum("ot"),missing:sum("missing"),duty:sum("duty"),rate: base?Math.round(100*(sum("P")+sum("late"))/base):null}};
 }
 
 /* ---------------- views ---------------- */
@@ -364,7 +366,8 @@ function viewTimesheet(){
     kpi("Late (of which NO OT)",`${st.tot.late} (${st.tot.noot})`),
     kpi("Absent / sick",`${st.tot.A} / ${st.tot.S}`,"bad"),
     kpi("Attendance rate",st.tot.rate==null?"–":st.tot.rate+"%","good"),
-    kpi("Overtime hours",st.tot.ot),
+    kpi("Overtime (full month)",st.tot.ot),
+    kpi("of which earned / planned",`${st.tot.otEarned} / ${st.tot.otPlan}`),
     kpi(autoOn()?"Not entered today":"Entries missing to date",st.tot.missing,st.tot.missing?"bad":"good"));
 
   const legend=el("div",{class:"legend"},
@@ -397,7 +400,7 @@ function viewTimesheet(){
         if(e.auto) btn.title="Assumed present: no entry was made for this work day"; else if(r) btn.title = r.src ? `From ${r.src}` : "Changed — open to see who";
         tr.append(el("td",{class:k},btn));
       }
-      tr.append(...[t.P,t.late,t.noot,t.A,t.S,t.L,t.T,t.rate==null?"–":t.rate+"%"].map(v=>el("td",{class:"tot",text:v})), el("td",{class:"tot h",text:t.ot}));
+      tr.append(...[t.P,t.late,t.noot,t.A,t.S,t.L,t.T,t.rate==null?"–":t.rate+"%"].map(v=>el("td",{class:"tot",text:v})), el("td",{class:"tot h",title:`Earned ${t.otEarned} h + planned ${t.otPlan} h`,text:t.ot}));
       body.append(tr);
     }
   }
@@ -423,8 +426,8 @@ function tsv(){
 function viewOvertime(){
   const st=monthStats(), list=activeStaff().map(s=>({s,t:st.per[s.id]})).sort((a,b)=>b.t.ot-a.t.ot);
   const max=Math.max(1,...list.map(x=>x.t.ot));
-  const tbl=el("table",{class:"list"},el("thead",{},el("tr",{},...["Employee","Crew","Worked days","Late days","NO OT days","OT hours",""].map(h=>el("th",{text:h})))),
-    el("tbody",{},...list.map(({s,t})=>el("tr",{},el("td",{text:s.name}),el("td",{text:s.crew}),el("td",{class:"n",text:t.P+t.late}),el("td",{class:"n",text:t.late}),el("td",{class:"n",text:t.noot}),el("td",{class:"n",text:t.ot}),
+  const tbl=el("table",{class:"list"},el("thead",{},el("tr",{},...["Employee","Crew","Worked days","Late days","NO OT days","Earned to date","Planned (rest of month)","Full month OT",""].map(h=>el("th",{text:h})))),
+    el("tbody",{},...list.map(({s,t})=>el("tr",{},el("td",{text:s.name}),el("td",{text:s.crew}),el("td",{class:"n",text:t.P+t.late}),el("td",{class:"n",text:t.late}),el("td",{class:"n",text:t.noot}),el("td",{class:"n",text:t.otEarned}),el("td",{class:"n muted",text:t.otPlan}),el("td",{class:"n",style:"font-weight:700",text:t.ot}),
       el("td",{style:"width:30%"},el("div",{class:"bar-ot",style:`width:${(100*t.ot/max).toFixed(1)}%`}))))));
   const o=S.cfg.ot||DEFAULT_CFG.ot;
   const rules=el("table",{class:"list"},el("thead",{},el("tr",{},el("th",{text:"Work block"}),...[1,2,3,4,5,6,7].map(d=>el("th",{text:"Day "+d})),el("th",{text:"Total"}))),
@@ -432,9 +435,9 @@ function viewOvertime(){
       el("tr",{},el("td",{text:l}),...a.map((v,i)=>el("td",{class:"n",text:i<len?v:"–"})),el("td",{class:"n",text:a.slice(0,len).reduce((x,y)=>x+Number(y),0)})))));
   const ld=S.cfg.lateDed||DEFAULT_CFG.lateDed;
   return [...statusNotes(), el("div",{class:"two"},
-    el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Overtime by employee"}),el("strong",{class:"num",text:`${st.tot.ot} h this month`})),el("div",{class:"card-b"},tbl)),
+    el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"Overtime by employee"}),el("strong",{class:"num",text:`${st.tot.ot} h this month (${st.tot.otEarned} earned + ${st.tot.otPlan} planned)`})),el("div",{class:"card-b"},tbl)),
     el("section",{class:"card"},el("div",{class:"card-h"},el("h2",{text:"How overtime is calculated"})),el("div",{class:"card-b"},rules,
-      el("p",{class:"small muted",text:`Day 1 is the first working day after the days off. On a worked day, LT1, LT2 and LT3 take off ${ld.LT1}, ${ld.LT2} and ${ld.LT3} h (never below 0). NO OT, absent, sick, leave, training and days off earn 0 h. Change these on the Settings tab.`}))))];
+      el("p",{class:"small muted",text:`Day 1 is the first working day after the days off. On a worked day, LT1, LT2 and LT3 take off ${ld.LT1}, ${ld.LT2} and ${ld.LT3} h (never below 0). NO OT, absent, sick, leave, training and days off earn 0 h. Today and future work days with no entry are counted at their planned hours, so the total is the full-month figure; entering a late, absence or leave code later reduces it. Change these on the Settings tab.`}))))];
 }
 
 /* ---------- attendance reports: daily + weekly (Outlook-safe HTML, Aramco brand palette) ---------- */
