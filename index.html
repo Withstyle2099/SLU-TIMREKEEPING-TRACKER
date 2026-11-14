@@ -996,6 +996,7 @@ function lockApp(){ store.set("sluKey",""); unsubs.forEach(f=>f()); unsubs=[]; i
 
 (function boot(){
   const today=riyadhToday(); S.month=today>="2026-11"?today.slice(0,7):"2026-11"; $("#mPick").value=S.month;
+  S.admin = location.hash==="#admin";
   render();
   const cfg=window.FIREBASE_CONFIG;
   if(!window.firebase||!cfg||!cfg.apiKey||cfg.apiKey.startsWith("PASTE")){ S.ready=true; soon(); return; }
