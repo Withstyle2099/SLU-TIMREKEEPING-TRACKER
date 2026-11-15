@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SLU Timesheet - network test</title>
+<style>
+  body{font-family:"Segoe UI",system-ui,Arial,sans-serif;margin:0;color:#323232;background:#fff}
+  .bar{height:4px;background:linear-gradient(90deg,#0033A0,#00A3E0 70%,#84BD00)}
+  main{max-width:640px;margin:0 auto;padding:28px 20px}
+  h1{color:#0033A0;font-size:24px;margin:0 0 4px}
+  p{color:#5F6369;margin:0 0 20px}
+  .row{display:flex;justify-content:space-between;align-items:center;border:1px solid #E1E5EA;border-radius:8px;padding:12px 14px;margin-bottom:8px}
+  .ok{color:#00843D;font-weight:700}.bad{color:#B3341C;font-weight:700}.wait{color:#8A6100}
+  .big{font-size:18px;font-weight:700;margin:22px 0 6px}
+</style>
+</head>
+<body>
+<div class="bar"></div>
+<main>
+  <h1>SLU Timesheet - network test</h1>
+  <p>If you can read this page, this web address opens on your network. The checks below test the services the timesheet needs.</p>
+  <div class="row"><span>This page (host)</span><span class="ok">Opens ✓</span></div>
+  <div class="row"><span>Google app library (gstatic.com)</span><span id="sdk" class="wait">checking…</span></div>
+  <div class="row"><span>Database (firestore.googleapis.com)</span><span id="db" class="wait">checking…</span></div>
+  <div class="row"><span>Sign-in service (identitytoolkit.googleapis.com)</span><span id="auth" class="wait">checking…</span></div>
+  <div class="big" id="verdict"></div>
+  <p id="hint"></p>
+  <p style="font-size:12px">Address tested: <span id="addr"></span></p>
+</main>
+<script>
+document.getElementById("addr").textContent = location.href;
+const set = (id, ok) => { const e = document.getElementById(id); e.textContent = ok ? "Reachable ✓" : "Blocked ✗"; e.className = ok ? "ok" : "bad"; return ok; };
+function loadScript(src){ return new Promise(r => { const s = document.createElement("script"); s.src = src; s.onload = () => r(true); s.onerror = () => r(false); document.head.appendChild(s); setTimeout(() => r(false), 12000); }); }
+async function reach(url){ try { const c = new AbortController(); setTimeout(() => c.abort(), 12000); await fetch(url, {signal: c.signal}); return true; } catch(e){ return false; } }
+(async () => {
+  const sdk = set("sdk", (await loadScript("https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js")) && !!window.firebase);
+  const db = set("db", await reach("https://firestore.googleapis.com/v1/projects/slu-attendance/databases/(default)/documents/ping/test"));
+  const au = set("auth", await reach("https://identitytoolkit.googleapis.com/v1/projects?key=test"));
+  const v = document.getElementById("verdict"), h = document.getElementById("hint");
+  if (sdk && db) { v.textContent = "All good - the full timesheet app can run from this address."; v.className = "big ok"; }
+  else { v.textContent = "This address opens, but the database is blocked."; v.className = "big bad"; h.textContent = "Tell Claude which lines show Blocked."; }
+})();
+</script>
+</body>
+</html>
